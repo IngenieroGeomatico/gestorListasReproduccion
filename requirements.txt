@@ -1,0 +1,5 @@
+spotipy>=2.26
+deezer-python>=7.3
+python-dotenv>=1.0
+spotipyfree>=1.9
+websockets>=16
