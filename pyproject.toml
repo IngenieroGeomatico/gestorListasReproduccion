@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gestor-listas"
+version = "0.1.0"
+description = "Librería para gestionar listas de reproducción entre servicios de streaming"
+requires-python = ">=3.10"
+dependencies = [
+    "spotipy>=2.26",
+    "deezer-python>=7.3",
+    "python-dotenv>=1.0",
+    "spotipyfree>=1.9",
+    "websockets>=16",
+]
+
+[project.scripts]
+gestor-listas = "gestor_listas.cli:app"
