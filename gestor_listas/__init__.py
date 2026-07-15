@@ -2,7 +2,7 @@ from .model import Playlist, Track
 from .providers.base import Provider
 from .providers.deezer import DeezerProvider
 from .providers.spotify import SpotifyProvider
-from .importers.spotify import SpotifyImporter
+from .providers.youtube import YouTubeProvider
 
 __all__ = [
     "Playlist",
@@ -10,5 +10,5 @@ __all__ = [
     "Provider",
     "DeezerProvider",
     "SpotifyProvider",
-    "SpotifyImporter",
+    "YouTubeProvider",
 ]

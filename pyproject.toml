@@ -13,7 +13,17 @@ dependencies = [
     "python-dotenv>=1.0",
     "spotipyfree>=1.9",
     "websockets>=16",
+    "mutagen>=1.47",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "cryptography>=44.0",
+    "requests>=2.32",
+    "yt-dlp>=2026.07",
 ]
+
+[tool.setuptools.packages.find]
+include = ["gestor_listas*"]
+exclude = ["data*", "tests*"]
 
 [project.scripts]
 gestor-listas = "gestor_listas.cli:app"
