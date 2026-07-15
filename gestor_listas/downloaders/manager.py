@@ -23,12 +23,13 @@ class DownloadManager:
         self,
         output_dir: str | Path = "downloads",
         prefer: str = "deezer",
+        audio_format: str = "best",
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prefer = prefer
         self._deezer = DeezerDownloader()
-        self._youtube = YouTubeDownloader()
+        self._youtube = YouTubeDownloader(output_format=audio_format)
         self._storage = Storage()
 
     def download_track(self, track: Track, output_dir: Optional[Path] = None) -> DownloadResult:
@@ -57,6 +58,7 @@ class DownloadManager:
         playlist: Playlist,
         use_subfolder: bool = True,
         track_ids: Optional[set[str]] = None,
+        limit: int = 0,
     ) -> list[DownloadResult]:
         dest = self.output_dir
         if use_subfolder:
@@ -65,11 +67,21 @@ class DownloadManager:
             dest = self.output_dir / safe
             dest.mkdir(parents=True, exist_ok=True)
 
+        tracks = playlist.tracks
+        if track_ids is not None:
+            tracks = [t for t in tracks if t.id in track_ids]
+        if limit > 0:
+            tracks = tracks[:limit]
+
+        total = len(tracks)
         results: list[DownloadResult] = []
-        for track in playlist.tracks:
-            if track_ids is not None and track.id not in track_ids:
-                continue
+        for i, track in enumerate(tracks, 1):
+            print(f"  [{i}/{total}] {track.artist} - {track.title}", flush=True)
             result = self.download_track(track, output_dir=dest)
+            if result.path:
+                print(f"    OK: {result.path.name}", flush=True)
+            else:
+                print(f"    Error: {result.error or 'desconocido'}", flush=True)
             results.append(result)
         return results
 
@@ -79,12 +91,13 @@ class DownloadManager:
         source: Optional[str] = None,
         use_subfolder: bool = True,
         track_ids: Optional[set[str]] = None,
+        limit: int = 0,
     ) -> list[DownloadResult]:
         if playlist_id:
             pl = self._storage.load_playlist(playlist_id)
             if not pl:
                 return []
-            return self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids)
+            return self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids, limit=limit)
 
         playlists = (
             self._storage.load_playlists_by_source(source)
@@ -93,5 +106,5 @@ class DownloadManager:
         )
         results: list[DownloadResult] = []
         for pl in playlists:
-            results.extend(self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids))
+            results.extend(self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids, limit=limit))
         return results

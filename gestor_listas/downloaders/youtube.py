@@ -7,51 +7,48 @@ from typing import Optional
 from ..model import Track
 
 
-VALID_FORMATS = {"best", "mp3", "opus", "m4a"}
-
-
 class YouTubeDownloader:
     def __init__(self, output_format: str = "best") -> None:
-        if output_format not in VALID_FORMATS:
-            raise ValueError(f"Formato inválido: {output_format}. Válidos: {', '.join(sorted(VALID_FORMATS))}")
         self.output_format = output_format
+
+    def _get_url(self, track: Track) -> str:
+        if track.uri and "youtube.com/watch?v=" in track.uri:
+            return track.uri
+        return f"ytsearch:{track.artist} - {track.title}"
 
     def download(self, track: Track, output_dir: str | Path) -> Optional[Path]:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = f"{track.artist} - {track.title}".replace("/", "_").replace("\0", "")
-        ext = "opus" if self.output_format == "best" else self.output_format
-        output_path = output_dir / f"{safe_name}.{ext}"
 
-        if output_path.exists():
-            return output_path
+        fmt = self.output_format
 
-        search_query = f"ytsearch:{track.artist} - {track.title}"
-
-        if self.output_format == "best":
+        if fmt in ("best", "opus"):
             cmd = [
                 "yt-dlp",
-                "-f", "bestaudio/best",
-                "-S", "codec:opus,ext:webm",
+                "-f", "bestaudio[ext=webm]/bestaudio",
+                "--extract-audio",
+                "--audio-format", "opus",
+                "--audio-quality", "0",
                 "--embed-thumbnail",
                 "--embed-metadata",
-                "-o", str(output_path),
+                "-o", str(output_dir / f"{safe_name}.%(ext)s"),
                 "--no-playlist",
-                search_query,
+                self._get_url(track),
             ]
         else:
             cmd = [
                 "yt-dlp",
                 "-f", "bestaudio/best",
-                "-x",
-                "--audio-format", self.output_format,
+                "--extract-audio",
+                "--audio-format", fmt,
                 "--audio-quality", "0",
                 "--embed-thumbnail",
                 "--embed-metadata",
-                "-o", str(output_path),
+                "-o", str(output_dir / f"{safe_name}.%(ext)s"),
                 "--no-playlist",
-                search_query,
+                self._get_url(track),
             ]
 
         import shutil
@@ -61,22 +58,29 @@ class YouTubeDownloader:
             cmd.insert(2, f"deno:{deno_path}")
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
         if result.returncode != 0:
             return None
 
-        actual_path = None
-        if output_path.exists():
-            actual_path = output_path
-        else:
+        output_path = None
+        for f in output_dir.iterdir():
+            if f.stem == safe_name and f.suffix in {".mp3", ".m4a", ".opus", ".webm", ".ogg"}:
+                output_path = f
+                break
+
+        if not output_path:
             for f in output_dir.iterdir():
-                if f.stem == safe_name and f.suffix in {".mp3", ".m4a", ".opus", ".webm", ".ogg"}:
-                    actual_path = f
+                if f.stem.startswith(safe_name[:30]):
+                    output_path = f
                     break
 
-        if actual_path:
-            from ..bpm_analyzer import get_bpm, write_bpm
-            bpm = get_bpm(actual_path)
-            if bpm is not None:
-                write_bpm(actual_path, bpm)
+        if output_path and output_path.suffix.lower() in (".webp", ".png", ".jpg"):
+            output_path = None
 
-        return actual_path
+        if output_path:
+            from ..bpm_analyzer import get_bpm, write_bpm
+            bpm = get_bpm(output_path)
+            if bpm is not None:
+                write_bpm(output_path, bpm)
+
+        return output_path

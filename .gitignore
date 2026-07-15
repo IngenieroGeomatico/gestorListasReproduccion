@@ -19,10 +19,12 @@ htmlcov/
 venv/
 
 # data & downloads
-data/
+data/gestor.db
+data/*.sqlite
 downloads/
 .cache/
 *.db
+.cache
 
 # OS artifacts
 .DS_Store
