@@ -8,6 +8,13 @@ from gestor_listas.model import Playlist
 from gestor_listas.storage import Storage
 
 
+class TestGetSourcesPath:
+    def test_points_to_data_sources_json(self) -> None:
+        path = sync.get_sources_path()
+        assert path.name == "sources.json"
+        assert path.parent.name == "data"
+
+
 class TestLoadSources:
     def test_missing_file_returns_defaults(self, tmp_path) -> None:
         missing = tmp_path / "no_such.json"

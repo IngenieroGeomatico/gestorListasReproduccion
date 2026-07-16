@@ -3,7 +3,14 @@ from datetime import datetime
 import pytest
 
 from gestor_listas.model import Playlist, Track
-from gestor_listas.storage import Storage
+from gestor_listas.storage import Storage, get_default_db_path
+
+
+class TestGetDefaultDbPath:
+    def test_points_to_data_gestor_db(self) -> None:
+        path = get_default_db_path()
+        assert path.name == "gestor.db"
+        assert path.parent.name == "data"
 
 
 @pytest.fixture

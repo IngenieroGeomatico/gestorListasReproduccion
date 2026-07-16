@@ -104,3 +104,64 @@ class TestGetBpm:
     def test_swallows_exceptions(self, tmp_path, mocker) -> None:
         mocker.patch("gestor_listas.bpm_analyzer.detect_bpm", side_effect=RuntimeError("boom"))
         assert get_bpm(tmp_path / "x.mp3") is None
+
+
+class TestReadExistingBpmByFormat:
+    """Verifica que se elige la clase de mutagen y la key correctas por
+    extensión, sin depender de ficheros binarios reales."""
+
+    def test_flac_reads_bpm_key(self, tmp_path, mocker) -> None:
+        fake = mocker.patch("gestor_listas.bpm_analyzer.FLAC")
+        fake.return_value = {"BPM": ["123"]}
+        assert read_existing_bpm(tmp_path / "song.flac") == 123.0
+        fake.assert_called_once()
+
+    def test_ogg_reads_bpm_key(self, tmp_path, mocker) -> None:
+        fake = mocker.patch("gestor_listas.bpm_analyzer.OggVorbis")
+        fake.return_value = {"BPM": ["140"]}
+        assert read_existing_bpm(tmp_path / "song.ogg") == 140.0
+
+    def test_flac_without_bpm_returns_none(self, tmp_path, mocker) -> None:
+        fake = mocker.patch("gestor_listas.bpm_analyzer.FLAC")
+        fake.return_value = {}
+        assert read_existing_bpm(tmp_path / "song.flac") is None
+
+    def test_m4a_reads_itunes_key(self, tmp_path, mocker) -> None:
+        fake = mocker.patch("gestor_listas.bpm_analyzer.MP4")
+        fake.return_value = {"----:com.apple.iTunes:BPM": [b"128"]}
+        assert read_existing_bpm(tmp_path / "song.m4a") == 128.0
+
+
+class TestWriteBpmByFormat:
+    def test_flac_writes_bpm_key(self, tmp_path, mocker) -> None:
+        tags: dict = {}
+        instance = mocker.MagicMock()
+        instance.__setitem__.side_effect = tags.__setitem__
+        fake = mocker.patch("gestor_listas.bpm_analyzer.FLAC", return_value=instance)
+
+        assert write_bpm(tmp_path / "song.flac", 90.6) is True
+        fake.assert_called_once()
+        instance.save.assert_called_once()
+        assert tags["BPM"] == ["91"]
+
+    def test_ogg_writes_bpm_key(self, tmp_path, mocker) -> None:
+        tags: dict = {}
+        instance = mocker.MagicMock()
+        instance.__setitem__.side_effect = tags.__setitem__
+        mocker.patch("gestor_listas.bpm_analyzer.OggVorbis", return_value=instance)
+
+        assert write_bpm(tmp_path / "song.opus", 128.0) is True
+        assert tags["BPM"] == ["128"]
+
+    def test_m4a_writes_itunes_key(self, tmp_path, mocker) -> None:
+        tags: dict = {}
+        instance = mocker.MagicMock()
+        instance.__setitem__.side_effect = tags.__setitem__
+        mocker.patch("gestor_listas.bpm_analyzer.MP4", return_value=instance)
+
+        assert write_bpm(tmp_path / "song.m4a", 100.0) is True
+        assert tags["----:com.apple.iTunes:BPM"] == [b"100"]
+
+    def test_failure_returns_false(self, tmp_path, mocker) -> None:
+        mocker.patch("gestor_listas.bpm_analyzer.FLAC", side_effect=Exception("corrupto"))
+        assert write_bpm(tmp_path / "song.flac", 90) is False

@@ -4,10 +4,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 from gestor_listas.downloaders.deezer import (
     CHUNK_SIZE,
     DeezerDownloader,
+    _blowfish_key,
     _decrypt,
+    _decrypt_chunk,
     _decrypt_stream_to_file,
 )
 from gestor_listas.downloaders.manager import DownloadManager, DownloadResult
@@ -25,6 +29,42 @@ class _FakeResp:
     def iter_content(self, chunk_size):  # noqa: ARG002 - firma compatible
         for i in range(0, len(self._data), self._step):
             yield self._data[i:i + self._step]
+
+
+class TestBlowfishKey:
+    def test_key_is_deterministic_and_16_bytes(self) -> None:
+        key = _blowfish_key("3135556")
+        assert len(key) == 16
+        # Vector fijo: si cambia el algoritmo de derivación, esto salta.
+        assert key.hex() == "6c6c666b39662c37652575603c643439"
+
+    def test_different_ids_yield_different_keys(self) -> None:
+        assert _blowfish_key("111") != _blowfish_key("222")
+
+
+class TestDecryptChunk:
+    def test_roundtrip_with_known_key(self) -> None:
+        key = _blowfish_key("3135556")
+        plain = b"A" * CHUNK_SIZE
+        cipher = Cipher(algorithms.Blowfish(key), modes.CBC(b"\x00\x01\x02\x03\x04\x05\x06\x07"))
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(plain) + encryptor.finalize()
+
+        assert _decrypt_chunk(ciphertext, key) == plain
+
+    def test_only_every_third_block_encrypted(self) -> None:
+        # _decrypt cifra solo el bloque 0, 3, 6... Los demás quedan en claro.
+        key = _blowfish_key("3135556")
+        cipher = Cipher(algorithms.Blowfish(key), modes.CBC(b"\x00\x01\x02\x03\x04\x05\x06\x07"))
+        enc = cipher.encryptor()
+        block0_plain = b"X" * CHUNK_SIZE
+        block0_enc = enc.update(block0_plain) + enc.finalize()
+        block1_plain = b"Y" * CHUNK_SIZE  # este NO se cifra (índice 1)
+
+        data = block0_enc + block1_plain
+        out = _decrypt(data, "3135556")
+        assert out[:CHUNK_SIZE] == block0_plain
+        assert out[CHUNK_SIZE:] == block1_plain
 
 
 class TestStreamingDecrypt:
@@ -63,6 +103,98 @@ class TestResolveDeezerId:
         dl = DeezerDownloader(provider=provider)
         track = Track(id="abc", title="Song", artist="Artist")
         assert dl._resolve_deezer_id(track) is None
+
+
+class TestDeezerStreamUrl:
+    def test_get_stream_url_success(self, mocker) -> None:
+        provider = MagicMock()
+        provider._gw.side_effect = [
+            {"TRACK_TOKEN": "tok"},  # song.getData
+            {"USER": {"OPTIONS": {"license_token": "lic"}}},  # deezer.getUserData
+        ]
+        dl = DeezerDownloader(provider=provider)
+
+        resp = mocker.Mock(status_code=200)
+        resp.json.return_value = {
+            "data": [{"media": [{"sources": [{"url": "https://media/stream"}]}]}]
+        }
+        mocker.patch("gestor_listas.downloaders.deezer.requests.post", return_value=resp)
+
+        assert dl._get_stream_url("123") == "https://media/stream"
+
+    def test_get_stream_url_no_track_token(self) -> None:
+        provider = MagicMock()
+        provider._gw.return_value = {}  # sin TRACK_TOKEN
+        dl = DeezerDownloader(provider=provider)
+        assert dl._get_stream_url("123") is None
+
+    def test_get_stream_url_http_error(self, mocker) -> None:
+        provider = MagicMock()
+        provider._gw.side_effect = [
+            {"TRACK_TOKEN": "tok"},
+            {"USER": {"OPTIONS": {"license_token": "lic"}}},
+        ]
+        dl = DeezerDownloader(provider=provider)
+        resp = mocker.Mock(status_code=403)
+        mocker.patch("gestor_listas.downloaders.deezer.requests.post", return_value=resp)
+        assert dl._get_stream_url("123") is None
+
+    def test_get_stream_url_gw_exception(self) -> None:
+        provider = MagicMock()
+        provider._gw.side_effect = RuntimeError("gw caido")
+        dl = DeezerDownloader(provider=provider)
+        assert dl._get_stream_url("123") is None
+
+
+class TestDeezerTagFile:
+    def test_tag_file_writes_metadata(self, tmp_path, mocker) -> None:
+        provider = MagicMock()
+        provider._gw.side_effect = [
+            {  # song.getData
+                "SNG_TITLE": "Cancion",
+                "ART_NAME": "Artista",
+                "ALB_ID": "555",
+                "TRACK_NUMBER": 3,
+                "GENRE_ID": 23,
+            },
+            {  # album.getData
+                "ALB_TITLE": "Album",
+                "DIGITAL_RELEASE_DATE": "2021-05-01",
+                "ALB_PICTURE": "hash",
+            },
+        ]
+        dl = DeezerDownloader(provider=provider)
+
+        write_tags = mocker.patch("gestor_listas.audio.write_id3_tags")
+        mocker.patch("gestor_listas.audio.detect_bpm", return_value=128.0)
+        mocker.patch(
+            "gestor_listas.downloaders.deezer.requests.get",
+            return_value=mocker.Mock(content=b"coverbytes"),
+        )
+
+        mp3 = tmp_path / "song.mp3"
+        mp3.write_bytes(b"x")
+        dl._tag_file(mp3, "123")
+
+        write_tags.assert_called_once()
+        _, kwargs = write_tags.call_args
+        assert kwargs["title"] == "Cancion"
+        assert kwargs["artist"] == "Artista"
+        assert kwargs["album"] == "Album"
+        assert kwargs["year"] == "2021"
+        assert kwargs["genre"] == "K-Pop"
+        assert kwargs["bpm"] == 128.0
+
+    def test_tag_file_gw_failure_returns_early(self, tmp_path, mocker) -> None:
+        provider = MagicMock()
+        provider._gw.side_effect = RuntimeError("no disponible")
+        dl = DeezerDownloader(provider=provider)
+        write_tags = mocker.patch("gestor_listas.audio.write_id3_tags")
+
+        mp3 = tmp_path / "song.mp3"
+        mp3.write_bytes(b"x")
+        dl._tag_file(mp3, "123")  # no debe lanzar
+        write_tags.assert_not_called()
 
 
 class TestYouTubeParseOutputPath:

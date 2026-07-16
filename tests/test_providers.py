@@ -256,6 +256,92 @@ class TestSpotifyProvider:
         assert _track_from_sp_item({"track": {}}) is None
 
 
+class TestSpotifyHttpInternals:
+    """Cubre las rutas HTTP reales mockeando requests a nivel de modulo."""
+
+    def _resp(self, mocker, payload):
+        r = mocker.Mock()
+        r.json.return_value = payload
+        r.raise_for_status.return_value = None
+        return r
+
+    def test_client_credentials_token(self, mocker) -> None:
+        provider = SpotifyProvider(use_client_credentials=True)
+        post = mocker.patch(
+            "gestor_listas.providers.spotify.requests.post",
+            return_value=self._resp(mocker, {"access_token": "tok123", "expires_in": 3600}),
+        )
+        token = provider._get_client_credentials_token()
+        assert token == "tok123"
+        assert provider._token == "tok123"
+        post.assert_called_once()
+
+    def test_ensure_token_uses_client_credentials(self, mocker) -> None:
+        provider = SpotifyProvider(use_client_credentials=True)
+        mocker.patch(
+            "gestor_listas.providers.spotify.requests.post",
+            return_value=self._resp(mocker, {"access_token": "auto", "expires_in": 3600}),
+        )
+        assert provider._ensure_token() == "auto"
+
+    def test_ensure_token_without_mode_raises(self) -> None:
+        provider = SpotifyProvider()  # sin token, scraper ni cc
+        with pytest.raises(RuntimeError, match="No hay token disponible"):
+            provider._ensure_token()
+
+    def test_api_get_sends_bearer(self, mocker) -> None:
+        provider = SpotifyProvider(bearer_token="mytoken")
+        get = mocker.patch(
+            "gestor_listas.providers.spotify.requests.get",
+            return_value=self._resp(mocker, {"ok": True}),
+        )
+        result = provider._api_get("/me")
+        assert result == {"ok": True}
+        _, kwargs = get.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer mytoken"
+
+    def test_api_post_sends_json(self, mocker) -> None:
+        provider = SpotifyProvider(bearer_token="mytoken")
+        post = mocker.patch(
+            "gestor_listas.providers.spotify.requests.post",
+            return_value=self._resp(mocker, {"id": "new"}),
+        )
+        result = provider._api_post("/playlists", {"name": "x"})
+        assert result == {"id": "new"}
+        _, kwargs = post.call_args
+        assert kwargs["json"] == {"name": "x"}
+
+    def test_api_get_paginated_follows_next(self, mocker) -> None:
+        provider = SpotifyProvider(bearer_token="mytoken")
+        page1 = self._resp(mocker, {"items": [{"a": 1}], "next": "https://api.spotify.com/v1/next"})
+        page2 = self._resp(mocker, {"items": [{"b": 2}], "next": None})
+        mocker.patch(
+            "gestor_listas.providers.spotify.requests.get",
+            side_effect=[page1, page2],
+        )
+        items = provider._api_get_paginated("/playlists/pl/tracks")
+        assert items == [{"a": 1}, {"b": 2}]
+
+    def test_get_playlist_full_flow(self, mocker) -> None:
+        provider = SpotifyProvider(bearer_token="mytoken")
+        mocker.patch.object(provider, "_api_get", return_value={
+            "id": "pl1",
+            "name": "Rock",
+            "description": "d",
+            "owner": {"display_name": "me"},
+            "public": True,
+            "external_urls": {"spotify": "https://open.spotify.com/playlist/pl1"},
+        })
+        mocker.patch.object(provider, "_api_get_paginated", return_value=[
+            {"track": {"id": "t1", "name": "Song", "artists": [{"name": "A"}],
+                       "album": {"name": "Alb"}, "duration_ms": 1000, "uri": "spotify:track:t1"}},
+        ])
+        pl = provider.get_playlist("pl1")
+        assert pl.name == "Rock"
+        assert pl.track_count == 1
+        assert pl.tracks[0].title == "Song"
+
+
 class TestDeezerProvider:
     def test_search_track_found(self, mocker) -> None:
         fake_track = MagicMock()
@@ -339,6 +425,61 @@ class TestDeezerProvider:
         provider.client = MagicMock()
         with pytest.raises(ValueError, match="No se pudo extraer el ID"):
             provider.get_playlist_by_url("https://example.com/no-playlist")
+
+
+class TestDeezerArlMode:
+    """Modo ARL: parsea la API GW interna mockeando _gw."""
+
+    def _make_arl_provider(self) -> DeezerProvider:
+        provider = DeezerProvider.__new__(DeezerProvider)
+        provider._session = MagicMock()
+        provider._api_token = "tok"
+        provider.client = None
+        return provider
+
+    def test_get_playlists_arl(self, mocker) -> None:
+        provider = self._make_arl_provider()
+        mocker.patch.object(provider, "_gw", side_effect=[
+            {"USER": {"USER_ID": "42"}},  # deezer.getUserData
+            {"TAB": {"playlists": {"data": [
+                {"PLAYLIST_ID": "1", "TITLE": "Lista 1", "PARENT_USER_ID": "42", "STATUS": 0},
+            ]}}},  # deezer.pageProfile
+        ])
+        playlists = provider.get_playlists()
+        assert len(playlists) == 1
+        assert playlists[0].id == "1"
+        assert playlists[0].name == "Lista 1"
+        assert playlists[0].source == "deezer"
+
+    def test_get_playlist_arl_with_tracks(self, mocker) -> None:
+        provider = self._make_arl_provider()
+        mocker.patch.object(provider, "_gw", side_effect=[
+            {"DATA": {"PLAYLIST_ID": "9", "TITLE": "Mi Lista", "PARENT_USER_ID": "42", "STATUS": 0}},
+            {"data": [
+                {"SNG_ID": "100", "SNG_TITLE": "Tema", "ART_NAME": "Artista",
+                 "ALB_TITLE": "Album", "DURATION": 180},
+            ]},
+        ])
+        pl = provider.get_playlist("9")
+        assert pl.id == "9"
+        assert pl.track_count == 1
+        assert pl.tracks[0].id == "100"
+        assert pl.tracks[0].duration_ms == 180000
+
+    def test_public_search_fallback(self, mocker) -> None:
+        provider = self._make_arl_provider()
+        resp = mocker.Mock()
+        resp.json.return_value = {"data": [
+            {"id": 7, "title": "Res", "artist": {"name": "A"},
+             "album": {"title": "Alb"}, "duration": 200, "isrc": "X"},
+        ]}
+        resp.raise_for_status.return_value = None
+        mocker.patch("gestor_listas.providers.deezer.requests.get", return_value=resp)
+
+        track = provider.search_track("Res", "A")
+        assert track is not None
+        assert track.id == "7"
+        assert track.isrc == "X"
 
 
 class TestDeezerGwTokenRefresh:
@@ -429,3 +570,85 @@ class TestYouTubeProvider:
         provider = YouTubeProvider()
         with pytest.raises(NotImplementedError):
             provider.get_playlists()
+
+
+class TestYouTubeProviderSubprocess:
+    """Parsea la salida JSON de yt-dlp mockeando subprocess."""
+
+    def _run(self, mocker, stdout: str, returncode: int = 0):
+        return mocker.Mock(returncode=returncode, stdout=stdout, stderr="")
+
+    def test_get_playlist_by_url_parses_entries(self, mocker) -> None:
+        import json
+
+        provider = YouTubeProvider()
+        provider._yt_dlp_checked = True  # evita el check de version
+
+        data = {
+            "title": "Mi Playlist",
+            "description": "desc",
+            "uploader": "Canal",
+            "entries": [
+                {"id": "vid1", "title": "Cancion 1", "uploader": "Artista 1", "duration": 200},
+                {"id": "vid2", "title": "Cancion 2", "channel": "Artista 2", "duration": None},
+                {"id": "", "title": "sin id"},  # se ignora
+            ],
+        }
+        mocker.patch(
+            "gestor_listas.providers.youtube.subprocess.run",
+            return_value=self._run(mocker, json.dumps(data)),
+        )
+
+        url = "https://www.youtube.com/playlist?list=PLtest"
+        pl = provider.get_playlist_by_url(url)
+        assert pl.id == "PLtest"
+        assert pl.name == "Mi Playlist"
+        assert pl.track_count == 2
+        assert pl.tracks[0].id == "vid1"
+        assert pl.tracks[0].duration_ms == 200000
+        assert pl.tracks[1].duration_ms is None
+
+    def test_get_playlist_by_url_error(self, mocker) -> None:
+        provider = YouTubeProvider()
+        provider._yt_dlp_checked = True
+        mocker.patch(
+            "gestor_listas.providers.youtube.subprocess.run",
+            return_value=self._run(mocker, "", returncode=1),
+        )
+        with pytest.raises(RuntimeError, match="Error al obtener playlist"):
+            provider.get_playlist_by_url("https://www.youtube.com/playlist?list=PLtest")
+
+    def test_search_track_parses_result(self, mocker) -> None:
+        import json
+
+        provider = YouTubeProvider()
+        provider._yt_dlp_checked = True
+        data = {"entries": [{"id": "vidX", "title": "Found", "uploader": "Chan", "duration": 100}]}
+        mocker.patch(
+            "gestor_listas.providers.youtube.subprocess.run",
+            return_value=self._run(mocker, json.dumps(data)),
+        )
+        track = provider.search_track("Song", "Artist")
+        assert track is not None
+        assert track.id == "vidX"
+        assert track.uri == "https://www.youtube.com/watch?v=vidX"
+
+    def test_search_track_no_results(self, mocker) -> None:
+        import json
+
+        provider = YouTubeProvider()
+        provider._yt_dlp_checked = True
+        mocker.patch(
+            "gestor_listas.providers.youtube.subprocess.run",
+            return_value=self._run(mocker, json.dumps({"entries": []})),
+        )
+        assert provider.search_track("x", "y") is None
+
+    def test_ensure_yt_dlp_missing(self, mocker) -> None:
+        provider = YouTubeProvider()
+        mocker.patch(
+            "gestor_listas.providers.youtube.subprocess.run",
+            side_effect=FileNotFoundError,
+        )
+        with pytest.raises(RuntimeError, match="yt-dlp no está instalado"):
+            provider._ensure_yt_dlp()

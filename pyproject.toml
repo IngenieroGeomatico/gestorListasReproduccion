@@ -21,9 +21,22 @@ dependencies = [
     "yt-dlp>=2026.07",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+    "pytest-cov>=5.0",
+]
+
 [tool.setuptools.packages.find]
 include = ["gestor_listas*"]
 exclude = ["data*", "tests*"]
 
 [project.scripts]
 gestor-listas = "gestor_listas.cli:app"
+
+[tool.pytest.ini_options]
+addopts = "--cov=gestor_listas --cov-report=term-missing --cov-fail-under=70 -m 'not integration'"
+markers = [
+    "integration: pruebas que requieren red o binarios externos (ffmpeg, yt-dlp); desactivadas por defecto",
+]
