@@ -30,7 +30,6 @@ class DownloadManager:
         self.prefer = prefer
         self._deezer = DeezerDownloader()
         self._youtube = YouTubeDownloader(output_format=audio_format)
-        self._storage = Storage()
 
     def download_track(self, track: Track, output_dir: Optional[Path] = None) -> DownloadResult:
         dest = output_dir or self.output_dir
@@ -93,17 +92,19 @@ class DownloadManager:
         track_ids: Optional[set[str]] = None,
         limit: int = 0,
     ) -> list[DownloadResult]:
-        if playlist_id:
-            pl = self._storage.load_playlist(playlist_id)
-            if not pl:
-                return []
-            return self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids, limit=limit)
+        with Storage() as storage:
+            if playlist_id:
+                pl = storage.load_playlist(playlist_id)
+                if not pl:
+                    return []
+                return self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids, limit=limit)
 
-        playlists = (
-            self._storage.load_playlists_by_source(source)
-            if source
-            else self._storage.load_all_playlists()
-        )
+            playlists = (
+                storage.load_playlists_by_source(source)
+                if source
+                else storage.load_all_playlists()
+            )
+
         results: list[DownloadResult] = []
         for pl in playlists:
             results.extend(self.download_playlist(pl, use_subfolder=use_subfolder, track_ids=track_ids, limit=limit))

@@ -10,9 +10,8 @@ from ..model import Playlist, Track
 from .base import Provider
 
 
-PLAYLIST_URL_RE = re.compile(
-    r"(?:youtube\.com/playlist\?.*list=|youtu\.be/|youtube\.com/watch\?.*v=)([a-zA-Z0-9_-]+)"
-)
+# Solo capturamos el ID de PLAYLIST (parámetro list=), nunca el de un vídeo suelto.
+PLAYLIST_URL_RE = re.compile(r"[?&]list=([a-zA-Z0-9_-]+)")
 
 
 class YouTubeProvider(Provider):

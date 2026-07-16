@@ -155,6 +155,35 @@ def analyze_directory(
     return stats
 
 
+def parse_extensions(raw: str) -> set[str] | None:
+    """Convierte 'mp3,flac' en {'.mp3', '.flac'}; None si está vacío."""
+    if not raw:
+        return None
+    return {f".{e.strip().lstrip('.')}" for e in raw.split(",")}
+
+
+def print_stats(stats: dict[str, int]) -> None:
+    print()
+    print(f"  Escaneados: {stats['scanned']}")
+    print(f"  Saltados (ya tenían BPM): {stats['skipped']}")
+    print(f"  Analizados: {stats['analyzed']}")
+    print(f"  Etiquetados: {stats['tagged']}")
+    print(f"  Errores: {stats['errors']}")
+
+
+def run_analysis(path: str, recursive: bool, force: bool, extensions: str = "") -> dict[str, int]:
+    """Lógica compartida entre el CLI principal y el main() de este módulo."""
+    root = Path(path).resolve()
+    if not root.is_dir():
+        print(f"Error: '{root}' no es un directorio")
+        sys.exit(1)
+
+    print(f"Analizando {root} (recursivo={recursive})")
+    stats = analyze_directory(root, recursive=recursive, force=force, extensions=parse_extensions(extensions))
+    print_stats(stats)
+    return stats
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analiza BPM de canciones en un directorio")
     parser.add_argument("path", type=str, nargs="?", default=".", help="Directorio a analizar")
@@ -164,23 +193,7 @@ def main() -> None:
     parser.add_argument("-e", "--extensions", type=str, default="", help="Extensiones separadas por coma (ej: mp3,flac)")
     args = parser.parse_args()
 
-    root = Path(args.path).resolve()
-    if not root.is_dir():
-        print(f"Error: '{root}' no es un directorio")
-        sys.exit(1)
-
-    exts = None
-    if args.extensions:
-        exts = set(f".{e.strip().lstrip('.')}" for e in args.extensions.split(","))
-
-    print(f"Analizando {root} (recursivo={args.recursive})")
-    stats = analyze_directory(root, recursive=args.recursive, force=args.force, extensions=exts)
-    print()
-    print(f"  Escaneados: {stats['scanned']}")
-    print(f"  Saltados (ya tenían BPM): {stats['skipped']}")
-    print(f"  Analizados: {stats['analyzed']}")
-    print(f"  Etiquetados: {stats['tagged']}")
-    print(f"  Errores: {stats['errors']}")
+    run_analysis(args.path, recursive=args.recursive, force=args.force, extensions=args.extensions)
 
 
 if __name__ == "__main__":

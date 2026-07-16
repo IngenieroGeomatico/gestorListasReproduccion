@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Optional
 
 from .model import Playlist, Track
@@ -39,15 +41,6 @@ CREATE TABLE IF NOT EXISTS tracks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_playlist ON tracks(playlist_id);
-
-CREATE TABLE IF NOT EXISTS track_mappings (
-    spotify_id  TEXT,
-    deezer_id   TEXT,
-    isrc        TEXT,
-    confidence  REAL NOT NULL DEFAULT 1.0,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (spotify_id, deezer_id)
-);
 """
 
 
@@ -67,6 +60,17 @@ class Storage:
 
     def close(self) -> None:
         self._conn.close()
+
+    def __enter__(self) -> "Storage":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
     # ── Save ────────────────────────────────────────────────────
 
@@ -167,7 +171,6 @@ class Storage:
             )
             for t in track_rows
         ]
-        from datetime import datetime
         created = datetime.fromisoformat(row["created_at"]) if row["created_at"] else None
         updated = datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
         return Playlist(
