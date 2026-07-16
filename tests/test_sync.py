@@ -68,6 +68,39 @@ class TestImportUrls:
             storage.close()
 
 
+class TestConcurrency:
+    def test_fetch_all_parallel_preserves_order(self, tmp_path) -> None:
+        storage = Storage(db_path=tmp_path / "c.db")
+
+        def fetch(url: str) -> Playlist:
+            return Playlist(id=url, name=url, source="test")
+
+        try:
+            result = sync._import_urls(
+                ["a", "b", "c", "d"], storage, fetch, "test", max_workers=4
+            )
+            assert [p.id for p in result] == ["a", "b", "c", "d"]
+            assert storage.playlist_count() == 4
+        finally:
+            storage.close()
+
+    def test_fetch_all_parallel_isolates_failures(self, tmp_path) -> None:
+        storage = Storage(db_path=tmp_path / "c2.db")
+
+        def fetch(url: str) -> Playlist:
+            if url == "bad":
+                raise RuntimeError("fallo")
+            return Playlist(id=url, name=url, source="test")
+
+        try:
+            result = sync._import_urls(
+                ["a", "bad", "c"], storage, fetch, "test", max_workers=3
+            )
+            assert [p.id for p in result] == ["a", "c"]
+        finally:
+            storage.close()
+
+
 class TestImportDeezerAll:
     def test_isolates_failures(self, mocker, tmp_path) -> None:
         storage = Storage(db_path=tmp_path / "dz.db")
@@ -111,7 +144,7 @@ class TestRun:
 
         result = sync.run()
 
-        import_all.assert_called_once_with(fake_storage)
+        import_all.assert_called_once_with(fake_storage, 1)
         import_dz_urls.assert_not_called()
         assert result["deezer"] == [Playlist(id="d", name="d")]
         fake_storage.__exit__.assert_called_once()
@@ -132,7 +165,7 @@ class TestRun:
 
         sync.run()
 
-        import_dz_urls.assert_called_once_with(["url1"], fake_storage)
+        import_dz_urls.assert_called_once_with(["url1"], fake_storage, 1)
         import_all.assert_not_called()
 
     def test_run_dispatches_all_sources(self, mocker) -> None:
@@ -150,7 +183,7 @@ class TestRun:
 
         result = sync.run()
 
-        sp.assert_called_once_with(["s"], fake_storage)
-        dz.assert_called_once_with(["d"], fake_storage)
-        yt.assert_called_once_with(["y"], fake_storage)
+        sp.assert_called_once_with(["s"], fake_storage, 1)
+        dz.assert_called_once_with(["d"], fake_storage, 1)
+        yt.assert_called_once_with(["y"], fake_storage, 1)
         assert set(result) == {"spotify", "deezer", "youtube"}

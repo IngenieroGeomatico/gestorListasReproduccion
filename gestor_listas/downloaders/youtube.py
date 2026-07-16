@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from ..errors import DownloadError
 from ..model import Track
 
 
@@ -56,7 +57,7 @@ class YouTubeDownloader:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except FileNotFoundError:
-            raise RuntimeError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
+            raise DownloadError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
 
         if result.returncode != 0:
             return None

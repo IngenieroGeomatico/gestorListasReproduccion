@@ -267,58 +267,54 @@ class TestSpotifyHttpInternals:
 
     def test_client_credentials_token(self, mocker) -> None:
         provider = SpotifyProvider(use_client_credentials=True)
-        post = mocker.patch(
-            "gestor_listas.providers.spotify.requests.post",
-            return_value=self._resp(mocker, {"access_token": "tok123", "expires_in": 3600}),
+        provider._session = mocker.Mock()
+        provider._session.post.return_value = self._resp(
+            mocker, {"access_token": "tok123", "expires_in": 3600}
         )
         token = provider._get_client_credentials_token()
         assert token == "tok123"
         assert provider._token == "tok123"
-        post.assert_called_once()
+        provider._session.post.assert_called_once()
 
     def test_ensure_token_uses_client_credentials(self, mocker) -> None:
         provider = SpotifyProvider(use_client_credentials=True)
-        mocker.patch(
-            "gestor_listas.providers.spotify.requests.post",
-            return_value=self._resp(mocker, {"access_token": "auto", "expires_in": 3600}),
+        provider._session = mocker.Mock()
+        provider._session.post.return_value = self._resp(
+            mocker, {"access_token": "auto", "expires_in": 3600}
         )
         assert provider._ensure_token() == "auto"
 
     def test_ensure_token_without_mode_raises(self) -> None:
+        from gestor_listas.errors import AuthError
+
         provider = SpotifyProvider()  # sin token, scraper ni cc
-        with pytest.raises(RuntimeError, match="No hay token disponible"):
+        with pytest.raises(AuthError, match="No hay token disponible"):
             provider._ensure_token()
 
     def test_api_get_sends_bearer(self, mocker) -> None:
         provider = SpotifyProvider(bearer_token="mytoken")
-        get = mocker.patch(
-            "gestor_listas.providers.spotify.requests.get",
-            return_value=self._resp(mocker, {"ok": True}),
-        )
+        provider._session = mocker.Mock()
+        provider._session.get.return_value = self._resp(mocker, {"ok": True})
         result = provider._api_get("/me")
         assert result == {"ok": True}
-        _, kwargs = get.call_args
+        _, kwargs = provider._session.get.call_args
         assert kwargs["headers"]["Authorization"] == "Bearer mytoken"
 
     def test_api_post_sends_json(self, mocker) -> None:
         provider = SpotifyProvider(bearer_token="mytoken")
-        post = mocker.patch(
-            "gestor_listas.providers.spotify.requests.post",
-            return_value=self._resp(mocker, {"id": "new"}),
-        )
+        provider._session = mocker.Mock()
+        provider._session.post.return_value = self._resp(mocker, {"id": "new"})
         result = provider._api_post("/playlists", {"name": "x"})
         assert result == {"id": "new"}
-        _, kwargs = post.call_args
+        _, kwargs = provider._session.post.call_args
         assert kwargs["json"] == {"name": "x"}
 
     def test_api_get_paginated_follows_next(self, mocker) -> None:
         provider = SpotifyProvider(bearer_token="mytoken")
+        provider._session = mocker.Mock()
         page1 = self._resp(mocker, {"items": [{"a": 1}], "next": "https://api.spotify.com/v1/next"})
         page2 = self._resp(mocker, {"items": [{"b": 2}], "next": None})
-        mocker.patch(
-            "gestor_listas.providers.spotify.requests.get",
-            side_effect=[page1, page2],
-        )
+        provider._session.get.side_effect = [page1, page2]
         items = provider._api_get_paginated("/playlists/pl/tracks")
         assert items == [{"a": 1}, {"b": 2}]
 
@@ -615,7 +611,9 @@ class TestYouTubeProviderSubprocess:
             "gestor_listas.providers.youtube.subprocess.run",
             return_value=self._run(mocker, "", returncode=1),
         )
-        with pytest.raises(RuntimeError, match="Error al obtener playlist"):
+        from gestor_listas.errors import ProviderError
+
+        with pytest.raises(ProviderError, match="Error al obtener playlist"):
             provider.get_playlist_by_url("https://www.youtube.com/playlist?list=PLtest")
 
     def test_search_track_parses_result(self, mocker) -> None:
@@ -645,10 +643,12 @@ class TestYouTubeProviderSubprocess:
         assert provider.search_track("x", "y") is None
 
     def test_ensure_yt_dlp_missing(self, mocker) -> None:
+        from gestor_listas.errors import ProviderError
+
         provider = YouTubeProvider()
         mocker.patch(
             "gestor_listas.providers.youtube.subprocess.run",
             side_effect=FileNotFoundError,
         )
-        with pytest.raises(RuntimeError, match="yt-dlp no está instalado"):
+        with pytest.raises(ProviderError, match="yt-dlp no está instalado"):
             provider._ensure_yt_dlp()

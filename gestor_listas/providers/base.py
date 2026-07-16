@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from ..errors import PlaylistNotFoundError
 from ..model import Playlist, Track
 
 
@@ -29,7 +30,7 @@ class Provider(ABC):
         """Devuelve una playlist a partir de su URL."""
         pid = self.playlist_id_from_url(url)
         if not pid:
-            raise ValueError(f"No se pudo extraer el ID de la URL: {url}")
+            raise PlaylistNotFoundError(f"No se pudo extraer el ID de la URL: {url}")
         return self.get_playlist(pid)
 
     def search_track(self, title: str, artist: str) -> Optional[Track]:

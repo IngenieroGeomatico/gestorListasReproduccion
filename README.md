@@ -12,6 +12,9 @@ gestor_listas/
 ├── storage.py          # Persistencia en SQLite
 ├── sync.py             # Importación desde sources.json a SQLite
 ├── cli.py              # Interfaz de línea de comandos (gestor-listas)
+├── config.py           # Configuración centralizada (variables de entorno)
+├── errors.py           # Jerarquía de excepciones de dominio
+├── http.py             # Sesiones HTTP con reintentos y backoff
 ├── audio.py            # Etiquetado ID3 y detección de BPM (ffmpeg + scipy)
 ├── bpm_analyzer.py     # Análisis y escritura de BPM en un directorio
 ├── providers/
@@ -199,6 +202,52 @@ from gestor_listas.storage import Storage
 
 with Storage() as storage:
     playlists = storage.load_all_playlists()
+```
+
+## Manejo de errores
+
+La librería lanza excepciones de dominio (en `gestor_listas.errors`), lo que
+permite capturarlas con precisión:
+
+```python
+from gestor_listas import sync
+from gestor_listas import AuthError, ProviderError, GestorListasError
+
+try:
+    sync.run()
+except AuthError:
+    ...   # credenciales inválidas o expiradas
+except ProviderError:
+    ...   # fallo al leer datos de un servicio
+except GestorListasError:
+    ...   # cualquier otro error de la librería
+```
+
+Jerarquía: `GestorListasError` → `ConfigError`, `ProviderError`
+(→ `AuthError`, `PlaylistNotFoundError`), `DownloadError`.
+
+## Logging
+
+La librería no imprime a stdout: emite mensajes mediante el módulo `logging`
+(los `print` quedan solo en la CLI). Para ver la actividad, configura logging
+en tu aplicación:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+```
+
+## Concurrencia
+
+La sincronización y las descargas aceptan `max_workers` para paralelizar la
+parte de red (I/O-bound). Las escrituras en SQLite se mantienen secuenciales.
+
+```python
+from gestor_listas import sync
+sync.run(max_workers=4)          # importa varias playlists en paralelo
+
+from gestor_listas.downloaders import DownloadManager
+DownloadManager(max_workers=4)   # descarga varias pistas en paralelo
 ```
 
 ## Tests

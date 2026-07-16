@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -8,6 +10,8 @@ from ..model import Playlist, Track
 from ..storage import Storage
 from .deezer import DeezerDownloader
 from .youtube import YouTubeDownloader
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -24,10 +28,12 @@ class DownloadManager:
         output_dir: str | Path = "downloads",
         prefer: str = "deezer",
         audio_format: str = "best",
+        max_workers: int = 1,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.prefer = prefer
+        self.max_workers = max(1, max_workers)
         self._deezer = DeezerDownloader()
         self._youtube = YouTubeDownloader(output_format=audio_format)
 
@@ -73,16 +79,23 @@ class DownloadManager:
             tracks = tracks[:limit]
 
         total = len(tracks)
-        results: list[DownloadResult] = []
-        for i, track in enumerate(tracks, 1):
-            print(f"  [{i}/{total}] {track.artist} - {track.title}", flush=True)
+
+        def _download_one(item: tuple[int, Track]) -> DownloadResult:
+            i, track = item
+            logger.info("[%d/%d] %s - %s", i, total, track.artist, track.title)
             result = self.download_track(track, output_dir=dest)
             if result.path:
-                print(f"    OK: {result.path.name}", flush=True)
+                logger.info("OK: %s", result.path.name)
             else:
-                print(f"    Error: {result.error or 'desconocido'}", flush=True)
-            results.append(result)
-        return results
+                logger.warning("Error: %s", result.error or "desconocido")
+            return result
+
+        enumerated = list(enumerate(tracks, 1))
+        if self.max_workers > 1:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+                # Preserva el orden de las pistas en los resultados.
+                return list(pool.map(_download_one, enumerated))
+        return [_download_one(item) for item in enumerated]
 
     def download_from_storage(
         self,

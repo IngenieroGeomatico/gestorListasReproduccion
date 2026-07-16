@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "gestor-listas"
 version = "0.1.0"
 description = "Librería para gestionar listas de reproducción entre servicios de streaming"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "spotipy>=2.26",
@@ -31,6 +33,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["gestor_listas*"]
 exclude = ["data*", "tests*"]
+
+[tool.setuptools.package-data]
+gestor_listas = ["py.typed"]
 
 [project.scripts]
 gestor-listas = "gestor_listas.cli:app"

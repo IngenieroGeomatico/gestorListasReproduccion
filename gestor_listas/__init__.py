@@ -1,3 +1,11 @@
+from .errors import (
+    AuthError,
+    ConfigError,
+    DownloadError,
+    GestorListasError,
+    PlaylistNotFoundError,
+    ProviderError,
+)
 from .model import Playlist, Track
 from .providers.base import Provider
 from .providers.deezer import DeezerProvider
@@ -11,4 +19,10 @@ __all__ = [
     "DeezerProvider",
     "SpotifyProvider",
     "YouTubeProvider",
+    "GestorListasError",
+    "ConfigError",
+    "ProviderError",
+    "AuthError",
+    "PlaylistNotFoundError",
+    "DownloadError",
 ]

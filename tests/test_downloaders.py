@@ -118,7 +118,7 @@ class TestDeezerStreamUrl:
         resp.json.return_value = {
             "data": [{"media": [{"sources": [{"url": "https://media/stream"}]}]}]
         }
-        mocker.patch("gestor_listas.downloaders.deezer.requests.post", return_value=resp)
+        mocker.patch("gestor_listas.downloaders.deezer._session.post", return_value=resp)
 
         assert dl._get_stream_url("123") == "https://media/stream"
 
@@ -136,7 +136,7 @@ class TestDeezerStreamUrl:
         ]
         dl = DeezerDownloader(provider=provider)
         resp = mocker.Mock(status_code=403)
-        mocker.patch("gestor_listas.downloaders.deezer.requests.post", return_value=resp)
+        mocker.patch("gestor_listas.downloaders.deezer._session.post", return_value=resp)
         assert dl._get_stream_url("123") is None
 
     def test_get_stream_url_gw_exception(self) -> None:
@@ -168,7 +168,7 @@ class TestDeezerTagFile:
         write_tags = mocker.patch("gestor_listas.audio.write_id3_tags")
         mocker.patch("gestor_listas.audio.detect_bpm", return_value=128.0)
         mocker.patch(
-            "gestor_listas.downloaders.deezer.requests.get",
+            "gestor_listas.downloaders.deezer._session.get",
             return_value=mocker.Mock(content=b"coverbytes"),
         )
 
@@ -280,3 +280,26 @@ class TestDownloadManager:
 
         assert result.path is None
         assert result.error is not None
+
+    def test_download_playlist_parallel_preserves_order(self, tmp_path) -> None:
+        from gestor_listas.model import Playlist
+
+        manager = DownloadManager(output_dir=tmp_path, prefer="deezer", max_workers=3)
+        manager._deezer = MagicMock()
+        manager._youtube = MagicMock()
+
+        def fake_download(track, dest):
+            return dest / f"{track.id}.mp3"
+
+        manager._deezer.download.side_effect = fake_download
+
+        tracks = [Track(id=str(i), title=f"S{i}", artist="A") for i in range(5)]
+        pl = Playlist(id="pl", name="Lista", tracks=tracks)
+        results = manager.download_playlist(pl, use_subfolder=False)
+
+        assert [r.track.id for r in results] == ["0", "1", "2", "3", "4"]
+        assert all(r.path is not None for r in results)
+
+    def test_max_workers_floor_is_one(self, tmp_path) -> None:
+        manager = DownloadManager(output_dir=tmp_path, max_workers=0)
+        assert manager.max_workers == 1
