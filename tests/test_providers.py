@@ -5,6 +5,7 @@ import pytest
 from gestor_listas.model import Playlist, Track
 from gestor_listas.providers.deezer import DeezerProvider
 from gestor_listas.providers.spotify import SpotifyProvider, _track_from_sp_item
+from gestor_listas.providers.youtube import YouTubeProvider
 
 
 class FakeDeezerTrack:
@@ -316,3 +317,115 @@ class TestDeezerProvider:
         assert result.name == "My Deezer Playlist"
         assert result.track_count == 1
         assert result.tracks[0].artist == "Deezer Artist"
+
+    def test_playlist_id_from_url(self) -> None:
+        assert DeezerProvider.playlist_id_from_url("https://www.deezer.com/playlist/908622995") == "908622995"
+        assert DeezerProvider.playlist_id_from_url("deezer:playlist:123") == "123"
+        assert DeezerProvider.playlist_id_from_url("https://example.com") is None
+
+    def test_get_playlist_by_url_inherited(self, mocker) -> None:
+        # get_playlist_by_url ahora se hereda de Provider (base).
+        provider = DeezerProvider(access_token="token")
+        provider.client = MagicMock()
+        provider.get_playlist = MagicMock(
+            return_value=Playlist(id="908622995", name="Test", source="deezer")
+        )
+        result = provider.get_playlist_by_url("https://www.deezer.com/playlist/908622995")
+        assert result.id == "908622995"
+        provider.get_playlist.assert_called_once_with("908622995")
+
+    def test_get_playlist_by_url_invalid(self) -> None:
+        provider = DeezerProvider(access_token="token")
+        provider.client = MagicMock()
+        with pytest.raises(ValueError, match="No se pudo extraer el ID"):
+            provider.get_playlist_by_url("https://example.com/no-playlist")
+
+
+class TestDeezerGwTokenRefresh:
+    def _make_provider(self) -> DeezerProvider:
+        # Construimos sin __init__ para evitar tocar la red.
+        provider = DeezerProvider.__new__(DeezerProvider)
+        provider._session = MagicMock()
+        provider._api_token = "token_viejo"
+        provider.client = None
+        return provider
+
+    def test_refreshes_on_valid_token_required(self) -> None:
+        provider = self._make_provider()
+
+        error_resp = MagicMock()
+        error_resp.json.return_value = {"error": {"VALID_TOKEN_REQUIRED": "Invalid CSRF token"}}
+        error_resp.raise_for_status.return_value = None
+
+        ok_resp = MagicMock()
+        ok_resp.json.return_value = {"results": {"data": "ok"}}
+        ok_resp.raise_for_status.return_value = None
+
+        provider._session.post.side_effect = [error_resp, ok_resp]
+        provider._refresh_api_token = MagicMock(return_value="token_nuevo")
+
+        result = provider._gw("playlist.getSongs", {"PLAYLIST_ID": 1})
+
+        provider._refresh_api_token.assert_called_once()
+        assert result == {"data": "ok"}
+
+    def test_refreshes_on_gateway_error(self) -> None:
+        provider = self._make_provider()
+
+        error_resp = MagicMock()
+        error_resp.json.return_value = {"error": {"GATEWAY_ERROR": "invalid api token"}}
+        error_resp.raise_for_status.return_value = None
+
+        ok_resp = MagicMock()
+        ok_resp.json.return_value = {"results": {"ok": True}}
+        ok_resp.raise_for_status.return_value = None
+
+        provider._session.post.side_effect = [error_resp, ok_resp]
+        provider._refresh_api_token = MagicMock(return_value="token_nuevo")
+
+        result = provider._gw("song.getData", {"sng_id": 1})
+        provider._refresh_api_token.assert_called_once()
+        assert result == {"ok": True}
+
+    def test_raises_on_other_error(self) -> None:
+        provider = self._make_provider()
+
+        error_resp = MagicMock()
+        error_resp.json.return_value = {"error": {"DATA_ERROR": "not found"}}
+        error_resp.raise_for_status.return_value = None
+        provider._session.post.return_value = error_resp
+        provider._refresh_api_token = MagicMock()
+
+        with pytest.raises(Exception, match="Deezer API error"):
+            provider._gw("playlist.getSongs", {"PLAYLIST_ID": 1})
+        provider._refresh_api_token.assert_not_called()
+
+    def test_no_error_returns_results(self) -> None:
+        provider = self._make_provider()
+        resp = MagicMock()
+        resp.json.return_value = {"results": {"value": 42}}
+        resp.raise_for_status.return_value = None
+        provider._session.post.return_value = resp
+
+        result = provider._gw("some.method")
+        assert result == {"value": 42}
+
+
+class TestYouTubeProvider:
+    def test_playlist_id_from_playlist_url(self) -> None:
+        url = "https://www.youtube.com/playlist?list=PLVM595oooybLByMKs"
+        assert YouTubeProvider.playlist_id_from_url(url) == "PLVM595oooybLByMKs"
+
+    def test_playlist_id_from_watch_url_with_list(self) -> None:
+        url = "https://www.youtube.com/watch?v=abc123&list=PLxyz"
+        assert YouTubeProvider.playlist_id_from_url(url) == "PLxyz"
+
+    def test_bare_video_url_returns_none(self) -> None:
+        # URLs de vídeo suelto no deben capturarse como playlist.
+        assert YouTubeProvider.playlist_id_from_url("https://youtu.be/abc123") is None
+        assert YouTubeProvider.playlist_id_from_url("https://www.youtube.com/watch?v=abc123") is None
+
+    def test_get_playlists_not_implemented(self) -> None:
+        provider = YouTubeProvider()
+        with pytest.raises(NotImplementedError):
+            provider.get_playlists()

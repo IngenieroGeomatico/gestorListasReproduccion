@@ -8,7 +8,9 @@ from gestor_listas.storage import Storage
 
 @pytest.fixture
 def storage(tmp_path) -> Storage:
-    return Storage(db_path=tmp_path / "test.db")
+    s = Storage(db_path=tmp_path / "test.db")
+    yield s
+    s.close()
 
 
 class TestStorage:
@@ -91,3 +93,56 @@ class TestStorage:
         s = Storage(db_path=":memory:")
         assert s.playlist_count() == 0
         s.close()
+
+    def test_context_manager_closes_connection(self, tmp_path) -> None:
+        import sqlite3
+
+        with Storage(db_path=tmp_path / "ctx.db") as s:
+            assert s.playlist_count() == 0
+        # Tras salir del with, la conexión debe estar cerrada.
+        with pytest.raises(sqlite3.ProgrammingError):
+            s._conn.execute("SELECT 1")
+
+    def test_context_manager_returns_self(self, tmp_path) -> None:
+        s = Storage(db_path=tmp_path / "ctx2.db")
+        with s as entered:
+            assert entered is s
+        s.close()
+
+    def test_context_manager_closes_on_exception(self, tmp_path) -> None:
+        import sqlite3
+
+        s = Storage(db_path=tmp_path / "ctx3.db")
+        with pytest.raises(ValueError):
+            with s:
+                raise ValueError("boom")
+        with pytest.raises(sqlite3.ProgrammingError):
+            s._conn.execute("SELECT 1")
+
+    def test_track_order_preserved(self, storage: Storage) -> None:
+        tracks = [
+            Track(id=f"t{i}", title=f"Song {i}", artist="Artist")
+            for i in range(5)
+        ]
+        pl = Playlist(id="ordered", name="Ordered", tracks=tracks)
+        storage.save_playlist(pl)
+        loaded = storage.load_playlist("ordered")
+        assert loaded is not None
+        assert [t.id for t in loaded.tracks] == ["t0", "t1", "t2", "t3", "t4"]
+
+    def test_update_reorders_tracks(self, storage: Storage) -> None:
+        pl = Playlist(
+            id="reorder",
+            name="Reorder",
+            tracks=[Track(id="a", title="A", artist="X"), Track(id="b", title="B", artist="X")],
+        )
+        storage.save_playlist(pl)
+        reordered = Playlist(
+            id="reorder",
+            name="Reorder",
+            tracks=[Track(id="b", title="B", artist="X"), Track(id="a", title="A", artist="X")],
+        )
+        storage.save_playlist(reordered)
+        loaded = storage.load_playlist("reorder")
+        assert loaded is not None
+        assert [t.id for t in loaded.tracks] == ["b", "a"]
