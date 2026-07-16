@@ -10,6 +10,8 @@ from scipy.signal import butter, sosfilt
 
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, error as MutagenError
 
+from .errors import DownloadError
+
 # Mapping de género obtenido de Deezer genre.getData (0-200, más IDs dispersos)
 DEEZER_GENRE_MAP: dict[int, str] = {
     2: "Musique africaine",
@@ -229,7 +231,7 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except FileNotFoundError:
-            raise RuntimeError(
+            raise DownloadError(
                 "ffmpeg no está instalado o no está en el PATH. "
                 "Instálalo para poder analizar el BPM."
             )

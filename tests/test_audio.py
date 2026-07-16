@@ -30,10 +30,12 @@ class TestDetectBpm:
         assert detect_bpm(tmp_path / "no_existe.mp3") is None
 
     def test_ffmpeg_missing_raises(self, tmp_path, mocker) -> None:
+        from gestor_listas.errors import DownloadError
+
         audio_file = tmp_path / "song.mp3"
         audio_file.write_bytes(b"x")
         mocker.patch("gestor_listas.audio.subprocess.run", side_effect=FileNotFoundError)
-        with pytest.raises(RuntimeError, match="ffmpeg"):
+        with pytest.raises(DownloadError, match="ffmpeg"):
             detect_bpm(audio_file)
 
     def test_ffmpeg_failure_returns_none(self, tmp_path, mocker) -> None:

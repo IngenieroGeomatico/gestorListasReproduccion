@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-import os
+import logging
 import re
 import urllib.parse
 import webbrowser
@@ -9,12 +8,14 @@ from typing import Optional
 
 import deezer
 import requests
-from dotenv import load_dotenv
 
+from ..config import DeezerConfig
+from ..errors import AuthError, ProviderError
+from ..http import make_session
 from ..model import Playlist, Track
 from .base import Provider
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 GW_URL = "https://www.deezer.com/ajax/gw-light.php"
 PUBLIC_API = "https://api.deezer.com"
@@ -28,13 +29,12 @@ class DeezerProvider(Provider):
         access_token: Optional[str] = None,
         arl: Optional[str] = None,
     ) -> None:
-        self._arl = arl or os.getenv("DEEZER_ARL")
-        token = access_token or os.getenv("DEEZER_ACCESS_TOKEN")
-        email = os.getenv("DEEZER_EMAIL")
-        password = os.getenv("DEEZER_PASSWORD")
+        cfg = DeezerConfig.from_env()
+        self._arl = arl or cfg.arl
+        token = access_token or cfg.access_token
 
-        if not self._arl and not token and email and password:
-            self._arl = self.login(email, password)
+        if not self._arl and not token and cfg.email and cfg.password:
+            self._arl = self.login(cfg.email, cfg.password)
 
         if self._arl:
             self._session = self._build_arl_session()
@@ -47,9 +47,8 @@ class DeezerProvider(Provider):
     # ── ARL (web API) internals ──────────────────────────────────
 
     def _build_arl_session(self) -> requests.Session:
-        session = requests.Session()
+        session = make_session()
         session.cookies.set("arl", self._arl, domain=".deezer.com")
-        session.headers.update({"User-Agent": "Mozilla/5.0"})
         resp = session.post(
             GW_URL,
             params={"api_version": "1.0", "api_token": "null", "input": "3", "method": "deezer.getUserData"},
@@ -58,7 +57,7 @@ class DeezerProvider(Provider):
         resp.raise_for_status()
         data = resp.json()
         if data.get("error"):
-            raise ValueError(f"ARL inválido o expirado: {data['error']}")
+            raise AuthError(f"ARL inválido o expirado: {data['error']}")
         self._api_token = data["results"].get("checkForm", "")
         return session
 
@@ -82,7 +81,7 @@ class DeezerProvider(Provider):
             if err_keys & {"VALID_TOKEN_REQUIRED", "GATEWAY_ERROR"}:
                 self._api_token = self._refresh_api_token()
                 return self._gw(method, args)
-            raise Exception(f"Deezer API error: {err}")
+            raise ProviderError(f"Deezer API error: {err}")
         if method == "deezer.getUserData":
             self._api_token = result["results"]["checkForm"]
         return result.get("results", {})
@@ -239,8 +238,9 @@ class DeezerProvider(Provider):
 
     @classmethod
     def login(cls, email: str, password: str, auto_save: bool = False) -> str:
-        session = requests.Session()
-        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+        session = make_session(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        )
 
         resp = session.get("https://www.deezer.com/login", timeout=15)
         hash_match = re.search(r'"checkForm"\s*:\s*"([^"]+)"', resp.text)
@@ -257,7 +257,7 @@ class DeezerProvider(Provider):
         resp = session.post(f"{GW_URL}?method=deezer.loginDeezer", json=payload, timeout=15)
         data = resp.json()
         if data.get("error"):
-            raise ValueError(
+            raise AuthError(
                 f"Error al iniciar sesión: {data['error']}. "
                 "Si Deezer pide CAPTCHA, obtén el ARL manualmente:\n"
                 + DeezerProvider.get_arl_instructions()
@@ -265,7 +265,7 @@ class DeezerProvider(Provider):
 
         arl = session.cookies.get("arl")
         if not arl:
-            raise ValueError(
+            raise AuthError(
                 "No se pudo obtener el ARL automáticamente. "
                 "Intenta obtenerlo manualmente:\n"
                 + DeezerProvider.get_arl_instructions()
@@ -274,7 +274,7 @@ class DeezerProvider(Provider):
         if auto_save:
             from dotenv import set_key
             set_key(".env", "DEEZER_ARL", arl)
-            print("ARL de Deezer guardado en .env")
+            logger.info("ARL de Deezer guardado en .env")
 
         return arl
 
@@ -293,12 +293,13 @@ class DeezerProvider(Provider):
     def authenticate(
         app_id: Optional[str] = None,
         app_secret: Optional[str] = None,
-        redirect_uri: str = "https://example.com/",
+        redirect_uri: Optional[str] = None,
         auto_save: bool = False,
     ) -> str:
-        app_id = app_id or os.getenv("DEEZER_APP_ID", "")
-        app_secret = app_secret or os.getenv("DEEZER_APP_SECRET", "")
-        redirect_uri = redirect_uri or os.getenv("DEEZER_REDIRECT_URI", "https://example.com/")
+        cfg = DeezerConfig.from_env()
+        app_id = app_id or cfg.app_id
+        app_secret = app_secret or cfg.app_secret
+        redirect_uri = redirect_uri or cfg.redirect_uri
         perms = "basic_access,manage_library"
 
         params = urllib.parse.urlencode({
@@ -315,7 +316,7 @@ class DeezerProvider(Provider):
         query_params = urllib.parse.parse_qs(parsed.query)
         code = query_params.get("code", [None])[0]
         if not code:
-            raise ValueError("No se encontró el código de autorización en la URL.")
+            raise AuthError("No se encontró el código de autorización en la URL.")
 
         token_params = urllib.parse.urlencode({
             "app_id": app_id,
@@ -327,11 +328,11 @@ class DeezerProvider(Provider):
         token_data = urllib.parse.parse_qs(resp.text)
         access_token = token_data.get("access_token", [None])[0]
         if not access_token:
-            raise ValueError(f"Error obteniendo token: {resp.text}")
+            raise AuthError(f"Error obteniendo token: {resp.text}")
 
         if auto_save:
             from dotenv import set_key
             set_key(".env", "DEEZER_ACCESS_TOKEN", access_token)
-            print("Token de Deezer guardado en .env")
+            logger.info("Token de Deezer guardado en .env")
 
         return access_token

@@ -1,31 +1,30 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 import webbrowser
 from typing import Optional
 
-import requests
 import spotipy
-from dotenv import load_dotenv
 from spotipy.oauth2 import SpotifyOAuth
 
+from ..config import SpotifyConfig
+from ..errors import AuthError
+from ..http import make_session
 from ..model import Playlist, Track
 from .base import Provider
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 SPOTIFY_API = "https://api.spotify.com/v1"
 
-# Credenciales públicas de client-credentials que usa spotDL (no son secretas ni
-# personales). Se pueden sobrescribir con las variables de entorno
-# SPOTDL_CLIENT_ID / SPOTDL_CLIENT_SECRET.
-_DEFAULT_SPOTDL_CLIENT_ID = "5f573c9620494bae87890c0f08a60293"
-_DEFAULT_SPOTDL_CLIENT_SECRET = "212476d9b0f3472eaa762d90b19b0ba8"
-SPOTDL_CLIENT_ID = os.getenv("SPOTDL_CLIENT_ID", _DEFAULT_SPOTDL_CLIENT_ID)
-SPOTDL_CLIENT_SECRET = os.getenv("SPOTDL_CLIENT_SECRET", _DEFAULT_SPOTDL_CLIENT_SECRET)
+# Compatibilidad: se exponen a nivel de módulo, pero la fuente de verdad es
+# SpotifyConfig (config.py). Sobrescribibles con SPOTDL_CLIENT_ID/SECRET.
+SPOTDL_CLIENT_ID = SpotifyConfig.from_env().spotdl_client_id
+SPOTDL_CLIENT_SECRET = SpotifyConfig.from_env().spotdl_client_secret
 
 PLAYLIST_URL_RE = re.compile(
     r"(?:open\.spotify\.com/playlist/|spotify:playlist:)([a-zA-Z0-9]+)"
@@ -61,8 +60,9 @@ class SpotifyProvider(Provider):
         use_client_credentials: bool = False,
         use_scraping: bool = False,
     ) -> None:
-        self.client_id = client_id or os.getenv("SPOTIFY_CLIENT_ID", "")
-        self.client_secret = client_secret or os.getenv("SPOTIFY_CLIENT_SECRET", "")
+        cfg = SpotifyConfig.from_env()
+        self.client_id = client_id or cfg.client_id
+        self.client_secret = client_secret or cfg.client_secret
         self.redirect_uri = redirect_uri
         self.scope = scope
         self.cache_path = cache_path
@@ -70,20 +70,19 @@ class SpotifyProvider(Provider):
         self._token: Optional[str] = None
         self._token_expires: float = 0
         self._scraper: Optional[object] = None
+        self._session = make_session()
 
         if use_scraping:
             self._init_scraper()
         elif use_client_credentials:
-            self._cc_client_id = SPOTDL_CLIENT_ID
-            self._cc_client_secret = SPOTDL_CLIENT_SECRET
+            self._cc_client_id = cfg.spotdl_client_id
+            self._cc_client_secret = cfg.spotdl_client_secret
         elif bearer_token:
             self._token = bearer_token
             self._token_expires = float("inf")
-        else:
-            bearer = os.getenv("SPOTIFY_BEARER_TOKEN")
-            if bearer:
-                self._token = bearer
-                self._token_expires = float("inf")
+        elif cfg.bearer_token:
+            self._token = cfg.bearer_token
+            self._token_expires = float("inf")
 
     def _init_scraper(self) -> None:
         try:
@@ -99,7 +98,7 @@ class SpotifyProvider(Provider):
             return self._token
         if hasattr(self, "_cc_client_id"):
             return self._get_client_credentials_token()
-        raise RuntimeError(
+        raise AuthError(
             "No hay token disponible. Usa bearer_token, use_client_credentials=True, "
             "use_scraping=True, o completa OAuth con authenticate()"
         )
@@ -109,7 +108,7 @@ class SpotifyProvider(Provider):
         cc = base64.b64encode(
             f"{self._cc_client_id}:{self._cc_client_secret}".encode()
         ).decode()
-        resp = requests.post(
+        resp = self._session.post(
             "https://accounts.spotify.com/api/token",
             data={"grant_type": "client_credentials"},
             headers={"Authorization": f"Basic {cc}"},
@@ -128,7 +127,7 @@ class SpotifyProvider(Provider):
         if self._scraper:
             raise RuntimeError("Usa los métodos scraping, no el cliente spotipy")
         if self._sp_client is None:
-            refresh_token = os.getenv("SPOTIFY_REFRESH_TOKEN")
+            refresh_token = SpotifyConfig.from_env().refresh_token
             if refresh_token and not os.path.exists(self.cache_path):
                 with open(self.cache_path, "w") as f:
                     json.dump({"refresh_token": refresh_token}, f)
@@ -145,7 +144,7 @@ class SpotifyProvider(Provider):
 
     def _api_get(self, path: str, params: Optional[dict] = None) -> dict:
         token = self._ensure_token()
-        resp = requests.get(
+        resp = self._session.get(
             f"{SPOTIFY_API}{path}",
             headers={"Authorization": f"Bearer {token}"},
             params=params,
@@ -156,7 +155,7 @@ class SpotifyProvider(Provider):
 
     def _api_post(self, path: str, json_data: dict) -> dict:
         token = self._ensure_token()
-        resp = requests.post(
+        resp = self._session.post(
             f"{SPOTIFY_API}{path}",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json=json_data,
@@ -170,7 +169,7 @@ class SpotifyProvider(Provider):
         items: list[dict] = []
         url: Optional[str] = SPOTIFY_API + path
         while url:
-            resp = requests.get(
+            resp = self._session.get(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30,
@@ -185,12 +184,13 @@ class SpotifyProvider(Provider):
     def authenticate(
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
-        redirect_uri: str = "http://localhost:8888/callback",
+        redirect_uri: Optional[str] = None,
         auto_save: bool = False,
     ) -> str:
-        client_id = client_id or os.getenv("SPOTIFY_CLIENT_ID", "")
-        client_secret = client_secret or os.getenv("SPOTIFY_CLIENT_SECRET", "")
-        redirect_uri = redirect_uri or os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback")
+        cfg = SpotifyConfig.from_env()
+        client_id = client_id or cfg.client_id
+        client_secret = client_secret or cfg.client_secret
+        redirect_uri = redirect_uri or cfg.redirect_uri
 
         sp_oauth = SpotifyOAuth(
             client_id=client_id,
@@ -212,7 +212,7 @@ class SpotifyProvider(Provider):
         if auto_save:
             from dotenv import set_key
             set_key(".env", "SPOTIFY_REFRESH_TOKEN", refresh_token)
-            print("Refresh token de Spotify guardado en .env")
+            logger.info("Refresh token de Spotify guardado en .env")
 
         return refresh_token
 

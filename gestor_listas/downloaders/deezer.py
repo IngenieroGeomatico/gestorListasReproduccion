@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-import os
+import logging
 from pathlib import Path
 from typing import Optional
 
-import requests
-
+from ..errors import DownloadError
+from ..http import make_session
 from ..model import Track
 from ..providers.deezer import DeezerProvider
 
+logger = logging.getLogger(__name__)
+
 BLOWFISH_SECRET = b"g4el58wc0zvf9na1"
 CHUNK_SIZE = 2048
+
+# Sesión con reintentos compartida para descargas y carátulas.
+_session = make_session()
 
 
 def _blowfish_key(track_id: str) -> bytes:
@@ -91,7 +96,7 @@ class DeezerDownloader:
         if not stream_url:
             return None
 
-        resp = requests.get(stream_url, stream=True, timeout=120)
+        resp = _session.get(stream_url, stream=True, timeout=120)
         resp.raise_for_status()
         _decrypt_stream_to_file(resp, deezer_id, output_path)
 
@@ -126,7 +131,7 @@ class DeezerDownloader:
             "track_tokens": [track_token],
         }
 
-        resp = requests.post("https://media.deezer.com/v1/get_url", json=payload, timeout=30)
+        resp = _session.post("https://media.deezer.com/v1/get_url", json=payload, timeout=30)
         if resp.status_code != 200:
             return None
 
@@ -166,7 +171,7 @@ class DeezerDownloader:
                 if cover_hash:
                     cover_url = f"{COVER_BASE}/{cover_hash}/500x500-000000-80-0-0.jpg"
                     try:
-                        cover_data = requests.get(cover_url, timeout=15).content
+                        cover_data = _session.get(cover_url, timeout=15).content
                     except Exception:
                         pass
             except Exception:

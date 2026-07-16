@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from typing import Optional
 
+from ..errors import PlaylistNotFoundError, ProviderError
 from ..model import Playlist, Track
 from .base import Provider
 
@@ -26,7 +26,7 @@ class YouTubeProvider(Provider):
         try:
             subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=10)
         except FileNotFoundError:
-            raise RuntimeError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
+            raise ProviderError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
         self._yt_dlp_checked = True
 
     def get_playlists(self, channel: Optional[str] = None) -> list[Playlist]:
@@ -43,7 +43,7 @@ class YouTubeProvider(Provider):
         self._ensure_yt_dlp()
         pid = self.playlist_id_from_url(url)
         if not pid:
-            raise ValueError(f"No se pudo extraer el ID de la URL: {url}")
+            raise PlaylistNotFoundError(f"No se pudo extraer el ID de la URL: {url}")
 
         result = subprocess.run(
             [
@@ -61,7 +61,7 @@ class YouTubeProvider(Provider):
 
         if result.returncode != 0:
             error_msg = result.stderr.strip() or "Error desconocido"
-            raise RuntimeError(f"Error al obtener playlist de YouTube: {error_msg}")
+            raise ProviderError(f"Error al obtener playlist de YouTube: {error_msg}")
 
         data = json.loads(result.stdout)
 
