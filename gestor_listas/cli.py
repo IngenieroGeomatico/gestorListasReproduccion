@@ -9,7 +9,7 @@ from .sync import run as sync_run
 
 
 def cmd_sync(args: argparse.Namespace) -> None:
-    result = sync_run()
+    result = sync_run(sources_filter=args.source)
     labels = {"spotify": "Spotify", "deezer": "Deezer", "youtube": "YouTube"}
     total = 0
     for source, playlists in result.items():
@@ -68,6 +68,8 @@ def app() -> None:
 
     # sync
     p_sync = sub.add_parser("sync", help="Importar playlists desde sources.json")
+    p_sync.add_argument("-s", "--source", nargs="+", choices=["spotify", "deezer", "youtube"],
+                        help="Proveedor(es) a sincronizar (default: todos)")
     p_sync.set_defaults(func=cmd_sync)
 
     # list

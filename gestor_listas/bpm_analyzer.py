@@ -10,6 +10,7 @@ from mutagen.id3 import ID3, TBPM
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 from mutagen.oggvorbis import OggVorbis
+from mutagen.oggopus import OggOpus
 
 from .audio import detect_bpm
 
@@ -50,8 +51,12 @@ def read_existing_bpm(filepath: Path) -> Optional[float]:
             tbpm = tags.get("TBPM")
             if tbpm and tbpm.text:
                 return float(tbpm.text[0])
-        elif ext in (".flac", ".ogg", ".opus"):
-            tags = FLAC(str(filepath)) if ext == ".flac" else OggVorbis(str(filepath))
+        elif ext == ".flac":
+            tags = FLAC(str(filepath))
+        elif ext == ".opus":
+            tags = OggOpus(str(filepath))
+        elif ext == ".ogg":
+            tags = OggVorbis(str(filepath))
             bpm = tags.get("BPM")
             if bpm:
                 return float(bpm[0])
@@ -93,8 +98,13 @@ def write_bpm(filepath: Path, bpm: float) -> bool:
             tags["BPM"] = [bpm_str]
             tags.save()
             return True
-        elif ext in (".ogg", ".opus"):
+        elif ext == ".ogg":
             tags = OggVorbis(str(filepath))
+            tags["BPM"] = [bpm_str]
+            tags.save()
+            return True
+        elif ext == ".opus":
+            tags = OggOpus(str(filepath))
             tags["BPM"] = [bpm_str]
             tags.save()
             return True

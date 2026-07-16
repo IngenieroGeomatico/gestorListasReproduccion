@@ -256,7 +256,7 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
     sos = butter(4, [0.5 / (22050 / (2 * hop_length)), 5.0 / (22050 / (2 * hop_length))], btype="band", output="sos")
     envelope = sosfilt(sos, energy)
 
-    min_bpm, max_bpm = 60, 180
+    min_bpm, max_bpm = 60, 240
     min_lag = int(22050 * 60.0 / max_bpm / hop_length)
     max_lag = int(22050 * 60.0 / min_bpm / hop_length)
 
@@ -270,8 +270,49 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
     if len(ac) < 2:
         return None
 
-    peak_idx = np.argmax(ac)
-    lag = min_lag + peak_idx
-    bpm = 60.0 / (lag * hop_length / 22050.0)
+    # Encontrar todos los picos locales positivos de autocorrelación.
+    peaks = []
+    for i in range(len(ac)):
+        if ac[i] <= 0:
+            continue
+        left_ok = (i == 0) or (ac[i] >= ac[i - 1])
+        right_ok = (i == len(ac) - 1) or (ac[i] >= ac[i + 1])
+        if left_ok and right_ok:
+            l = min_lag + i
+            b = 60.0 / (l * hop_length / 22050.0)
+            peaks.append((ac[i], l, b))
 
-    return round(bpm, 1)
+    if not peaks:
+        peak_idx = np.argmax(ac)
+        best_lag = min_lag + peak_idx
+        bpm = 60.0 / (best_lag * hop_length / 22050.0)
+        return round(bpm, 1)
+
+    # Elegir el pico más fuerte como candidato principal.
+    peaks.sort(key=lambda x: -x[0])
+    best_val, best_lag, best_bpm = peaks[0]
+
+    # Si el candidato está por debajo del rango bailable (< 100 BPM),
+    # buscar un armónico más rápido (2×, 3×, 4×) entre los picos.
+    if best_bpm < 100:
+        found_harmonic = False
+        for factor, tol in [(2, 0.1), (3, 0.15), (4, 0.2)]:
+            target = best_bpm * factor
+            for val, lag, bpm in peaks[1:]:
+                ratio = bpm / target
+                if 1.0 - tol <= ratio <= 1.0 + tol and val >= best_val * 0.7:
+                    best_val, best_lag, best_bpm = val, lag, bpm
+                    found_harmonic = True
+                    break
+            if found_harmonic:
+                break
+        if not found_harmonic:
+            # Si no hay armónico positivo, comprobar contratiempo negativo (2×)
+            double_lag = best_lag / 2
+            if min_lag <= double_lag <= max_lag:
+                idx = int(round(double_lag - min_lag))
+                if 0 <= idx < len(ac) and ac[idx] < best_val * -0.7:
+                    best_lag = double_lag
+                    best_bpm = 60.0 / (best_lag * hop_length / 22050.0)
+
+    return round(best_bpm, 1)

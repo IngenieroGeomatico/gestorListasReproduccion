@@ -187,3 +187,23 @@ class TestRun:
         dz.assert_called_once_with(["d"], fake_storage, 1)
         yt.assert_called_once_with(["y"], fake_storage, 1)
         assert set(result) == {"spotify", "deezer", "youtube"}
+
+    def test_run_respects_sources_filter(self, mocker) -> None:
+        sources = {"spotify": ["s"], "deezer": ["d"], "youtube": ["y"]}
+        mocker.patch("gestor_listas.sync.load_sources", return_value=sources)
+
+        fake_storage = MagicMock()
+        fake_storage.__enter__.return_value = fake_storage
+        fake_storage.__exit__.return_value = None
+        mocker.patch("gestor_listas.sync.Storage", return_value=fake_storage)
+
+        sp = mocker.patch("gestor_listas.sync.import_spotify_urls", return_value=[Playlist(id="s", name="s")])
+        dz = mocker.patch("gestor_listas.sync.import_deezer_urls", return_value=[])
+        yt = mocker.patch("gestor_listas.sync.import_youtube_urls", return_value=[])
+
+        result = sync.run(sources_filter=["spotify", "youtube"])
+
+        sp.assert_called_once_with(["s"], fake_storage, 1)
+        dz.assert_not_called()
+        yt.assert_called_once_with(["y"], fake_storage, 1)
+        assert result == {"spotify": [Playlist(id="s", name="s")], "deezer": [], "youtube": []}
