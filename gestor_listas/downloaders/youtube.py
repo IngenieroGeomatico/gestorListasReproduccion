@@ -5,8 +5,21 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from ..config import resolve_ffmpeg
 from ..errors import DownloadError
 from ..model import Track
+
+
+def _ffmpeg_location() -> Optional[str]:
+    """Ruta a ffmpeg para yt-dlp, o None si no hay ninguno disponible.
+
+    A diferencia de resolve_ffmpeg(), no lanza: si no hay ffmpeg dejamos que
+    yt-dlp lo gestione (puede descargar audio nativo sin post-procesado).
+    """
+    try:
+        return resolve_ffmpeg()
+    except Exception:  # noqa: BLE001 - degradar sin --ffmpeg-location
+        return None
 
 
 class YouTubeDownloader:
@@ -38,6 +51,12 @@ class YouTubeDownloader:
             "--no-simulate",
             url,
         ]
+
+        # Indica a yt-dlp qué ffmpeg usar (sistema o el de imageio-ffmpeg).
+        ffmpeg = _ffmpeg_location()
+        if ffmpeg:
+            cmd.insert(1, "--ffmpeg-location")
+            cmd.insert(2, ffmpeg)
 
         deno_path = shutil.which("deno")
         if deno_path:

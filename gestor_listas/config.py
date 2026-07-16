@@ -10,14 +10,51 @@ que los tests puedan modificar `os.environ` y ver el cambio reflejado.
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Optional
 
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 # Carga el .env una única vez para toda la librería.
 load_dotenv()
+
+
+def resolve_ffmpeg() -> str:
+    """Devuelve la ruta a un binario de ffmpeg utilizable, en cascada:
+
+    1. ffmpeg del sistema si está en el PATH (respeta la instalación del usuario).
+    2. ffmpeg empaquetado por `imageio-ffmpeg` (multiplataforma, sin instalar nada).
+    3. Si no hay ninguno, lanza DownloadError con instrucciones.
+
+    `shutil.which` ya es multiplataforma (busca `ffmpeg`/`ffmpeg.exe` según el SO)
+    e `imageio-ffmpeg` entrega el binario correcto para Windows/Linux/macOS.
+    """
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+
+    try:
+        import imageio_ffmpeg
+
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled and os.path.isfile(bundled):
+            logger.debug("Usando ffmpeg empaquetado (imageio-ffmpeg): %s", bundled)
+            return bundled
+    except Exception as exc:  # noqa: BLE001 - degradamos con mensaje claro
+        logger.debug("imageio-ffmpeg no disponible: %s", exc)
+
+    # Import local para evitar dependencia circular (errors no importa config).
+    from .errors import DownloadError
+
+    raise DownloadError(
+        "No se encontró ffmpeg. Instálalo en el sistema o el paquete "
+        "'imageio-ffmpeg' (pip install imageio-ffmpeg)."
+    )
 
 # Credenciales públicas de client-credentials que usa spotDL (no son secretas ni
 # personales). Se pueden sobrescribir con SPOTDL_CLIENT_ID / SPOTDL_CLIENT_SECRET.

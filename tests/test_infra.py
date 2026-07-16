@@ -3,7 +3,7 @@
 import pytest
 
 from gestor_listas import errors
-from gestor_listas.config import DeezerConfig, SpotifyConfig
+from gestor_listas.config import DeezerConfig, SpotifyConfig, resolve_ffmpeg
 from gestor_listas.http import make_session
 
 
@@ -69,6 +69,29 @@ class TestDeezerConfig:
         cfg = DeezerConfig.from_env()
         assert cfg.arl is None
         assert cfg.access_token is None
+
+
+class TestResolveFfmpeg:
+    def test_prefers_system_ffmpeg(self, mocker) -> None:
+        mocker.patch("gestor_listas.config.shutil.which", return_value="/usr/bin/ffmpeg")
+        assert resolve_ffmpeg() == "/usr/bin/ffmpeg"
+
+    def test_falls_back_to_imageio(self, mocker, tmp_path) -> None:
+        mocker.patch("gestor_listas.config.shutil.which", return_value=None)
+        fake_exe = tmp_path / "ffmpeg-bundled.exe"
+        fake_exe.write_bytes(b"x")
+        fake_module = mocker.Mock()
+        fake_module.get_ffmpeg_exe.return_value = str(fake_exe)
+        mocker.patch.dict("sys.modules", {"imageio_ffmpeg": fake_module})
+        assert resolve_ffmpeg() == str(fake_exe)
+
+    def test_raises_when_none_available(self, mocker) -> None:
+        mocker.patch("gestor_listas.config.shutil.which", return_value=None)
+        fake_module = mocker.Mock()
+        fake_module.get_ffmpeg_exe.return_value = None
+        mocker.patch.dict("sys.modules", {"imageio_ffmpeg": fake_module})
+        with pytest.raises(errors.DownloadError, match="ffmpeg"):
+            resolve_ffmpeg()
 
 
 class TestHttpSession:

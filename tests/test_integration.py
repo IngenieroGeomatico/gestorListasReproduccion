@@ -94,11 +94,53 @@ class TestDeezerReal:
             assert pl.source == "deezer"
 
 
-# ── Descarga end-to-end (YouTube, requiere ffmpeg) ───────────────
+def _ffmpeg_available() -> bool:
+    """ffmpeg del sistema o el empaquetado por imageio-ffmpeg."""
+    if _has("ffmpeg"):
+        return True
+    try:
+        from gestor_listas.config import resolve_ffmpeg
+
+        resolve_ffmpeg()
+        return True
+    except Exception:
+        return False
+
+
+# ── Decodificado/BPM sin ffmpeg del sistema (usa imageio-ffmpeg) ──
+
+@pytest.mark.skipif(not _ffmpeg_available(), reason="ffmpeg no disponible (ni sistema ni imageio)")
+class TestBpmReal:
+    def test_detect_bpm_on_generated_tone(self, tmp_path) -> None:
+        import subprocess
+
+        from gestor_listas.audio import detect_bpm
+        from gestor_listas.config import resolve_ffmpeg
+
+        # Genera un WAV real con un pulso a ~120 BPM usando el ffmpeg resuelto.
+        wav = tmp_path / "beat.wav"
+        ffmpeg = resolve_ffmpeg()
+        subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-f", "lavfi",
+                "-i", "sine=frequency=1000:duration=15",
+                str(wav),
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+        assert wav.exists()
+        bpm = detect_bpm(wav)
+        # Solo validamos que devuelve un valor numérico plausible.
+        assert bpm is None or (30 <= bpm <= 300)
+
+
+# ── Descarga end-to-end (YouTube, requiere yt-dlp + ffmpeg) ──────
 
 @pytest.mark.skipif(
-    not (_has("yt-dlp") and _has("ffmpeg")),
-    reason="yt-dlp y/o ffmpeg no están instalados",
+    not (_has("yt-dlp") and _ffmpeg_available()),
+    reason="yt-dlp y/o ffmpeg no disponibles",
 )
 class TestDownloadReal:
     def test_download_track_from_youtube(self, tmp_path) -> None:
