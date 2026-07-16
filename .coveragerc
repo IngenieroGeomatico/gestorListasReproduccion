@@ -1,0 +1,33 @@
+[run]
+source = gestor_listas
+branch = True
+omit =
+    # CLI: solo cablea argparse con la lógica ya testada en sus módulos.
+    gestor_listas/cli.py
+    # main() de scripts: puntos de entrada por línea de comandos.
+    */__main__.py
+
+[report]
+# La métrica refleja la lógica que decidimos testear; se excluye el I/O
+# interactivo con servicios externos (OAuth, navegador, input()) porque
+# mockearlo prueba los mocks, no el comportamiento real.
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    def __str__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @(abc\.)?abstractmethod
+
+# Flujos de autenticación interactiva (abren navegador y piden input()).
+exclude_also =
+    def authenticate
+    def login
+    webbrowser.open
+
+show_missing = True
+skip_covered = False
+
+[html]
+directory = htmlcov
