@@ -19,8 +19,13 @@ load_dotenv()
 
 SPOTIFY_API = "https://api.spotify.com/v1"
 
-SPOTDL_CLIENT_ID = "5f573c9620494bae87890c0f08a60293"
-SPOTDL_CLIENT_SECRET = "212476d9b0f3472eaa762d90b19b0ba8"
+# Credenciales públicas de client-credentials que usa spotDL (no son secretas ni
+# personales). Se pueden sobrescribir con las variables de entorno
+# SPOTDL_CLIENT_ID / SPOTDL_CLIENT_SECRET.
+_DEFAULT_SPOTDL_CLIENT_ID = "5f573c9620494bae87890c0f08a60293"
+_DEFAULT_SPOTDL_CLIENT_SECRET = "212476d9b0f3472eaa762d90b19b0ba8"
+SPOTDL_CLIENT_ID = os.getenv("SPOTDL_CLIENT_ID", _DEFAULT_SPOTDL_CLIENT_ID)
+SPOTDL_CLIENT_SECRET = os.getenv("SPOTDL_CLIENT_SECRET", _DEFAULT_SPOTDL_CLIENT_SECRET)
 
 PLAYLIST_URL_RE = re.compile(
     r"(?:open\.spotify\.com/playlist/|spotify:playlist:)([a-zA-Z0-9]+)"
@@ -64,7 +69,7 @@ class SpotifyProvider(Provider):
         self._sp_client: Optional[spotipy.Spotify] = None
         self._token: Optional[str] = None
         self._token_expires: float = 0
-        self._scraper: Optional = None
+        self._scraper: Optional[object] = None
 
         if use_scraping:
             self._init_scraper()
@@ -277,11 +282,7 @@ class SpotifyProvider(Provider):
             source_url=url,
         )
 
-    def get_playlist_by_url(self, url: str) -> Playlist:
-        pid = self.playlist_id_from_url(url)
-        if not pid:
-            raise ValueError(f"No se pudo extraer el ID de la URL: {url}")
-        return self.get_playlist(pid)
+    # get_playlist_by_url se hereda de Provider.
 
     def search_track(self, title: str, artist: str) -> Optional[Track]:
         if self._scraper:

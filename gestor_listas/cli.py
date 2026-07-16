@@ -1,64 +1,39 @@
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
 
-from .bpm_analyzer import analyze_directory
+from .bpm_analyzer import run_analysis
 from .downloaders import DownloadManager
-from .providers.youtube import YouTubeProvider
 from .storage import Storage
-from .sync import load_sources, import_spotify_urls, import_deezer_urls, import_deezer_all, import_youtube_urls
+from .sync import run as sync_run
 
 
 def cmd_sync(args: argparse.Namespace) -> None:
-    sources = load_sources()
-    storage = Storage()
+    result = sync_run()
+    labels = {"spotify": "Spotify", "deezer": "Deezer", "youtube": "YouTube"}
     total = 0
-
-    spotify_urls = sources.get("spotify", [])
-    if spotify_urls:
-        pls = import_spotify_urls(spotify_urls, storage)
-        print(f"Spotify: {len(pls)} playlists importadas")
-        total += len(pls)
-
-    deezer_urls = sources.get("deezer", [])
-    if deezer_urls:
-        pls = import_deezer_urls(deezer_urls, storage)
-        print(f"Deezer: {len(pls)} playlists importadas")
-        total += len(pls)
-    else:
-        pls = import_deezer_all(storage)
-        print(f"Deezer: {len(pls)} playlists importadas (todas)")
-        total += len(pls)
-
-    youtube_urls = sources.get("youtube", [])
-    if youtube_urls:
-        pls = import_youtube_urls(youtube_urls, storage)
-        print(f"YouTube: {len(pls)} playlists importadas")
-        total += len(pls)
-
-    storage.close()
+    for source, playlists in result.items():
+        count = len(playlists)
+        total += count
+        print(f"{labels.get(source, source)}: {count} playlists importadas")
     print(f"Total: {total} playlists")
 
 
 def cmd_list(args: argparse.Namespace) -> None:
-    storage = Storage()
-    if args.source:
-        playlists = storage.load_playlists_by_source(args.source)
-    else:
-        playlists = storage.load_all_playlists()
+    with Storage() as storage:
+        if args.source:
+            playlists = storage.load_playlists_by_source(args.source)
+        else:
+            playlists = storage.load_all_playlists()
 
     if not playlists:
         print("No hay playlists almacenadas. Ejecuta 'gestor-listas sync' primero.")
-        storage.close()
         return
 
     for pl in playlists:
         src = f"[{pl.source}]" if pl.source else ""
         print(f"  {pl.id:<24} {src:<10} {pl.track_count:>4} temas  {pl.name}")
     print(f"\nTotal: {len(playlists)} playlists")
-    storage.close()
 
 
 def cmd_download(args: argparse.Namespace) -> None:
@@ -81,23 +56,7 @@ def cmd_download(args: argparse.Namespace) -> None:
 
 
 def cmd_bpm(args: argparse.Namespace) -> None:
-    root = Path(args.path).resolve()
-    if not root.is_dir():
-        print(f"Error: '{root}' no es un directorio")
-        sys.exit(1)
-
-    exts = None
-    if args.extensions:
-        exts = set(f".{e.strip().lstrip('.')}" for e in args.extensions.split(","))
-
-    print(f"Analizando {root} (recursivo={args.recursive})")
-    stats = analyze_directory(root, recursive=args.recursive, force=args.force, extensions=exts)
-    print()
-    print(f"  Escaneados: {stats['scanned']}")
-    print(f"  Saltados (ya tenían BPM): {stats['skipped']}")
-    print(f"  Analizados: {stats['analyzed']}")
-    print(f"  Etiquetados: {stats['tagged']}")
-    print(f"  Errores: {stats['errors']}")
+    run_analysis(args.path, recursive=args.recursive, force=args.force, extensions=args.extensions)
 
 
 def app() -> None:

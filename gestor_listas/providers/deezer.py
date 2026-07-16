@@ -76,7 +76,10 @@ class DeezerProvider(Provider):
         result = resp.json()
         err = result.get("error")
         if err:
-            if err in ({"VALID_TOKEN_REQUIRED": "Invalid CSRF token"}, {"GATEWAY_ERROR": "invalid api token"}):
+            # Un token de API caducado se manifiesta como VALID_TOKEN_REQUIRED o
+            # GATEWAY_ERROR: refrescamos el token y reintentamos una vez.
+            err_keys = set(err) if isinstance(err, dict) else set()
+            if err_keys & {"VALID_TOKEN_REQUIRED", "GATEWAY_ERROR"}:
                 self._api_token = self._refresh_api_token()
                 return self._gw(method, args)
             raise Exception(f"Deezer API error: {err}")
@@ -226,11 +229,7 @@ class DeezerProvider(Provider):
         m = re.search(r"(?:deezer\.com/playlist/|deezer:playlist:)(\d+)", url)
         return m.group(1) if m else None
 
-    def get_playlist_by_url(self, url: str) -> Playlist:
-        pid = self.playlist_id_from_url(url)
-        if not pid:
-            raise ValueError(f"No se pudo extraer el ID de la URL: {url}")
-        return self.get_playlist(pid)
+    # get_playlist_by_url se hereda de Provider.
 
     # ── Auth helpers ─────────────────────────────────────────────
 

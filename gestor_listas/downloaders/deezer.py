@@ -38,6 +38,34 @@ def _decrypt(data: bytes, track_id: str) -> bytes:
     return bytes(out)
 
 
+def _decrypt_stream_to_file(resp, track_id: str, output_path: Path) -> None:
+    """Descifra el stream de Deezer bloque a bloque y lo escribe a disco.
+
+    Evita cargar el fichero completo en memoria: acumula bytes en un buffer,
+    procesa los bloques de 2048 completos (cada tercero cifrado) y escribe el
+    resto pendiente al final.
+    """
+    key = _blowfish_key(track_id)
+    buffer = bytearray()
+    block_index = 0
+    with open(output_path, "wb") as f:
+        for part in resp.iter_content(chunk_size=CHUNK_SIZE * 128):
+            if not part:
+                continue
+            buffer.extend(part)
+            while len(buffer) >= CHUNK_SIZE:
+                block = bytes(buffer[:CHUNK_SIZE])
+                del buffer[:CHUNK_SIZE]
+                if block_index % 3 == 0:
+                    f.write(_decrypt_chunk(block, key))
+                else:
+                    f.write(block)
+                block_index += 1
+        # Último bloque parcial: nunca se cifra.
+        if buffer:
+            f.write(bytes(buffer))
+
+
 COVER_BASE = "https://cdn-images.dzcdn.net/images/cover"
 
 
@@ -65,12 +93,7 @@ class DeezerDownloader:
 
         resp = requests.get(stream_url, stream=True, timeout=120)
         resp.raise_for_status()
-        encrypted = resp.content
-
-        decrypted = _decrypt(encrypted, deezer_id)
-
-        with open(output_path, "wb") as f:
-            f.write(decrypted)
+        _decrypt_stream_to_file(resp, deezer_id, output_path)
 
         self._tag_file(output_path, deezer_id)
 
@@ -79,8 +102,6 @@ class DeezerDownloader:
     def _resolve_deezer_id(self, track: Track) -> Optional[str]:
         if track.id.isdigit():
             return track.id
-        if track.isrc:
-            return None
         found = self._provider.search_track(track.title, track.artist)
         if found:
             return found.id
@@ -154,6 +175,12 @@ class DeezerDownloader:
         from ..audio import _genre_name
         genre = _genre_name(genre_id)
 
+        # Calculamos el BPM antes de escribir para hacer una sola pasada de tags.
+        try:
+            bpm = detect_bpm(mp3_path)
+        except Exception:
+            bpm = None
+
         write_id3_tags(
             mp3_path,
             title=title,
@@ -163,8 +190,5 @@ class DeezerDownloader:
             track_number=track_number,
             genre=genre,
             cover_data=cover_data,
+            bpm=bpm,
         )
-
-        bpm = detect_bpm(mp3_path)
-        if bpm is not None:
-            write_id3_tags(mp3_path, bpm=bpm)

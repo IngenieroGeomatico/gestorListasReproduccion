@@ -226,7 +226,13 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
             tmp_path,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except FileNotFoundError:
+            raise RuntimeError(
+                "ffmpeg no está instalado o no está en el PATH. "
+                "Instálalo para poder analizar el BPM."
+            )
         if result.returncode != 0:
             return None
 
@@ -242,11 +248,11 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
     if num_frames < 10:
         return None
 
-    energy = np.zeros(num_frames)
-    for i in range(num_frames):
-        start = i * hop_length
-        frame = samples[start:start + frame_length]
-        energy[i] = np.sqrt(np.mean(frame ** 2))
+    # Energía RMS por frame, vectorizada: construimos una vista deslizante
+    # (num_frames, frame_length) sin copiar y calculamos el RMS por filas.
+    frame_starts = np.arange(num_frames) * hop_length
+    frames = samples[frame_starts[:, None] + np.arange(frame_length)]
+    energy = np.sqrt(np.mean(frames ** 2, axis=1))
 
     energy = energy - np.mean(energy)
     sos = butter(4, [0.5 / (22050 / (2 * hop_length)), 5.0 / (22050 / (2 * hop_length))], btype="band", output="sos")
