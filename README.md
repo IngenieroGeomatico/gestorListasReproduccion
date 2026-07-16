@@ -344,6 +344,79 @@ Las variables más importantes:
 Para **leer y descargar** de YouTube no hace falta ninguna variable; solo para
 **crear** playlists.
 
+### Cómo obtener cada credencial
+
+#### Deezer — `DEEZER_ARL` (recomendado)
+
+Es la cookie de sesión de tu navegador. La forma más rápida:
+
+1. Abre <https://www.deezer.com> en Chrome/Firefox/Edge e inicia sesión.
+2. Abre las DevTools con **F12**.
+3. Ve a la pestaña **Application** (Chrome/Edge) o **Storage** (Firefox).
+4. En el árbol de la izquierda: **Cookies → https://www.deezer.com**.
+5. Busca la cookie llamada **`arl`** y copia su **Value** (una cadena larga).
+6. Pégala en `.env`: `DEEZER_ARL=el_valor_copiado`.
+
+> El ARL caduca cada cierto tiempo; si deja de funcionar, repite el proceso.
+
+#### Deezer — `DEEZER_EMAIL` / `DEEZER_PASSWORD` (alternativa)
+
+Simplemente tu email y contraseña de Deezer. La librería inicia sesión y obtiene
+el ARL automáticamente. No funciona si Deezer pide CAPTCHA (en ese caso usa el
+ARL manual de arriba).
+
+#### Deezer — OAuth (`DEEZER_APP_ID` / `DEEZER_APP_SECRET` / `DEEZER_ACCESS_TOKEN`)
+
+Solo si prefieres OAuth oficial:
+
+1. Entra en <https://developers.deezer.com/myapps> y crea una aplicación.
+2. Copia el **Application ID** → `DEEZER_APP_ID` y el **Secret Key** → `DEEZER_APP_SECRET`.
+3. Genera el token ejecutando `DeezerProvider.authenticate(auto_save=True)` (abre
+   el navegador y guarda `DEEZER_ACCESS_TOKEN` en `.env`).
+
+#### Spotify — `SPOTIFY_BEARER_TOKEN` (para escritura, ~1h de validez)
+
+Token temporal extraído del navegador:
+
+1. Abre <https://open.spotify.com> con sesión iniciada y las DevTools (**F12**).
+2. Ve a la pestaña **Network** y filtra por `api.spotify.com`.
+3. Recarga la página y pincha en cualquier petición a `api.spotify.com`.
+4. En **Request Headers** copia el valor de `authorization:` que va después de
+   `Bearer ` (solo el token, sin la palabra "Bearer").
+5. Pégalo en `.env`: `SPOTIFY_BEARER_TOKEN=el_token`.
+
+> Caduca en ~1 hora; es la opción rápida para pruebas puntuales de escritura.
+
+#### Spotify — OAuth (`SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`)
+
+1. Entra en <https://developer.spotify.com/dashboard> y crea una app.
+2. Copia el **Client ID** → `SPOTIFY_CLIENT_ID` y el **Client Secret** →
+   `SPOTIFY_CLIENT_SECRET`.
+3. En *Settings* de la app añade el **Redirect URI** `http://localhost:8888/callback`.
+4. Ejecuta `SpotifyProvider.authenticate(auto_save=True)` para generar el refresh
+   token (requiere cuenta Premium para escritura completa).
+
+#### YouTube — `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN`
+
+Solo para **crear** playlists. Se obtienen desde Google Cloud:
+
+1. Entra en <https://console.cloud.google.com/> y crea (o elige) un proyecto.
+2. En **APIs y servicios → Biblioteca**, busca y habilita **YouTube Data API v3**.
+3. En **APIs y servicios → Pantalla de consentimiento OAuth**, configúrala (tipo
+   *Externo* basta) y añádete como *usuario de prueba* con tu cuenta de Google.
+4. En **APIs y servicios → Credenciales → Crear credenciales → ID de cliente
+   OAuth**, elige el tipo **Aplicación de escritorio**.
+5. Copia el **ID de cliente** → `YOUTUBE_CLIENT_ID` y el **Secreto de cliente** →
+   `YOUTUBE_CLIENT_SECRET` en `.env`.
+6. Genera el refresh token (una sola vez):
+
+```python
+from gestor_listas.importers.youtube import YouTubeImporter
+YouTubeImporter.authenticate(auto_save=True)  # abre el navegador, pega el código
+```
+
+Esto guarda `YOUTUBE_REFRESH_TOKEN` en `.env` automáticamente.
+
 `.env` y `data/gestor.db` están en `.gitignore` para no subir credenciales ni
 datos locales.
 
