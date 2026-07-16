@@ -97,7 +97,11 @@ def import_youtube_urls(urls: list[str], storage: Storage, max_workers: int = 1)
     return _import_urls(urls, storage, yt.get_playlist_by_url, "youtube", max_workers)
 
 
-def run(path: Optional[Path] = None, max_workers: int = 1) -> dict[str, list[Playlist]]:
+def run(
+    path: Optional[Path] = None,
+    max_workers: int = 1,
+    sources_filter: Optional[list[str]] = None,
+) -> dict[str, list[Playlist]]:
     sources = load_sources(path)
 
     result: dict[str, list[Playlist]] = {
@@ -107,18 +111,21 @@ def run(path: Optional[Path] = None, max_workers: int = 1) -> dict[str, list[Pla
     }
 
     with Storage() as storage:
-        spotify_urls = sources.get("spotify", [])
-        if spotify_urls:
-            result["spotify"] = import_spotify_urls(spotify_urls, storage, max_workers)
+        if sources_filter is None or "spotify" in sources_filter:
+            spotify_urls = sources.get("spotify", [])
+            if spotify_urls:
+                result["spotify"] = import_spotify_urls(spotify_urls, storage, max_workers)
 
-        deezer_urls = sources.get("deezer", [])
-        if deezer_urls:
-            result["deezer"] = import_deezer_urls(deezer_urls, storage, max_workers)
-        else:
-            result["deezer"] = import_deezer_all(storage, max_workers)
+        if sources_filter is None or "deezer" in sources_filter:
+            deezer_urls = sources.get("deezer", [])
+            if deezer_urls:
+                result["deezer"] = import_deezer_urls(deezer_urls, storage, max_workers)
+            else:
+                result["deezer"] = import_deezer_all(storage, max_workers)
 
-        youtube_urls = sources.get("youtube", [])
-        if youtube_urls:
-            result["youtube"] = import_youtube_urls(youtube_urls, storage, max_workers)
+        if sources_filter is None or "youtube" in sources_filter:
+            youtube_urls = sources.get("youtube", [])
+            if youtube_urls:
+                result["youtube"] = import_youtube_urls(youtube_urls, storage, max_workers)
 
     return result
