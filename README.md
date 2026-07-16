@@ -23,7 +23,8 @@ gestor_listas/
 │   ├── spotify.py      # Extracción desde Spotify (scraping / API)
 │   └── youtube.py      # Extracción desde YouTube (yt-dlp)
 ├── importers/
-│   └── spotify.py      # Importación de un modelo propio a Spotify
+│   ├── spotify.py      # Creación de playlists en Spotify
+│   └── youtube.py      # Creación de playlists en YouTube (Data API v3)
 ├── downloaders/
 │   ├── manager.py      # Orquestador de descargas (Deezer → YouTube)
 │   ├── deezer.py       # Descarga y descifrado desde Deezer
@@ -186,9 +187,56 @@ Premium. Este proyecto ofrece alternativas que no lo requieren:
 
 ### YouTube
 
-No requiere credenciales. Usa `yt-dlp` para leer playlists públicas y descargar
-audio. Si tienes `deno` instalado, se usa automáticamente como runtime de JS para
-sortear algunas restricciones de extracción.
+No requiere credenciales para **leer** playlists públicas ni **descargar** audio
+(usa `yt-dlp`). Si tienes `deno` instalado, se usa automáticamente como runtime de
+JS para sortear algunas restricciones de extracción.
+
+Para **crear** playlists en tu cuenta sí hace falta OAuth (ver más abajo).
+
+## Crear playlists (importadores)
+
+Además de leer, puedes volcar un modelo `Playlist` propio a Spotify o YouTube.
+Esto **escribe** en tu cuenta, así que requiere autenticación.
+
+### YouTube
+
+Crear playlists usa la **YouTube Data API v3** (yt-dlp solo lee). Puesta en marcha
+(una sola vez):
+
+1. Crea un proyecto en [Google Cloud Console](https://console.cloud.google.com/).
+2. Habilita **YouTube Data API v3**.
+3. Crea credenciales **OAuth** de tipo "Aplicación de escritorio".
+4. Pon `YOUTUBE_CLIENT_ID` y `YOUTUBE_CLIENT_SECRET` en tu `.env`.
+5. Autoriza una vez y guarda el refresh token:
+
+```python
+from gestor_listas.importers.youtube import YouTubeImporter
+YouTubeImporter.authenticate(auto_save=True)  # abre el navegador, pega el código
+```
+
+Después ya puedes importar cualquier playlist:
+
+```python
+from gestor_listas.importers.youtube import YouTubeImporter
+from gestor_listas.storage import Storage
+
+with Storage() as storage:
+    pl = storage.load_playlist("id_de_una_playlist")
+
+importer = YouTubeImporter()
+nueva = importer.import_playlist(pl, name="Copia en YouTube", public=False)
+print(nueva.source_url)
+```
+
+Busca cada canción en YouTube (o usa su URL si ya la tiene) y la añade a la lista
+creada. **Cuota:** la API da 10.000 unidades/día; crear + buscar + añadir consume
+~150-200 por canción, así que listas grandes pueden agotar la cuota diaria (se
+avisa con un error claro).
+
+### Spotify
+
+`SpotifyImporter` crea la playlist y añade las pistas (por URI o buscándolas).
+Requiere un modo de escritura de Spotify (bearer token u OAuth, ver tabla arriba).
 
 ## Almacenamiento local
 
@@ -290,8 +338,11 @@ Las variables más importantes:
 | `DEEZER_ARL` | Cookie ARL de Deezer (lectura y descarga de playlists) |
 | `DEEZER_EMAIL` / `DEEZER_PASSWORD` | Credenciales de Deezer para login automático (alternativa al ARL) |
 | `SPOTIFY_BEARER_TOKEN` | Token Bearer de Spotify desde el navegador (opcional, para escritura) |
+| `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` | Credenciales OAuth de Google (solo para **crear** playlists en YouTube) |
+| `YOUTUBE_REFRESH_TOKEN` | Token de refresco de YouTube (lo genera `YouTubeImporter.authenticate`) |
 
-YouTube no necesita ninguna variable de entorno.
+Para **leer y descargar** de YouTube no hace falta ninguna variable; solo para
+**crear** playlists.
 
 `.env` y `data/gestor.db` están en `.gitignore` para no subir credenciales ni
 datos locales.

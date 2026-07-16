@@ -63,6 +63,8 @@ _DEFAULT_SPOTDL_CLIENT_SECRET = "212476d9b0f3472eaa762d90b19b0ba8"
 
 _DEFAULT_SPOTIFY_REDIRECT = "http://localhost:8888/callback"
 _DEFAULT_DEEZER_REDIRECT = "https://example.com/"
+# "Out Of Band": Google devuelve el código en la propia página para copiarlo.
+_DEFAULT_YOUTUBE_REDIRECT = "urn:ietf:wg:oauth:2.0:oob"
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -113,4 +115,21 @@ class DeezerConfig:
             app_id=_env("DEEZER_APP_ID", "") or "",
             app_secret=_env("DEEZER_APP_SECRET", "") or "",
             redirect_uri=_env("DEEZER_REDIRECT_URI", _DEFAULT_DEEZER_REDIRECT) or _DEFAULT_DEEZER_REDIRECT,
+        )
+
+
+@dataclass(frozen=True)
+class YouTubeConfig:
+    client_id: str = ""
+    client_secret: str = ""
+    refresh_token: Optional[str] = None
+    redirect_uri: str = _DEFAULT_YOUTUBE_REDIRECT
+
+    @classmethod
+    def from_env(cls) -> "YouTubeConfig":
+        return cls(
+            client_id=_env("YOUTUBE_CLIENT_ID", "") or "",
+            client_secret=_env("YOUTUBE_CLIENT_SECRET", "") or "",
+            refresh_token=_env("YOUTUBE_REFRESH_TOKEN"),
+            redirect_uri=_env("YOUTUBE_REDIRECT_URI", _DEFAULT_YOUTUBE_REDIRECT) or _DEFAULT_YOUTUBE_REDIRECT,
         )
