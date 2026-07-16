@@ -2,7 +2,8 @@
 
 Librería y CLI en Python para leer listas de reproducción desde servicios de
 streaming (Spotify, Deezer, YouTube), almacenarlas en un modelo de datos local
-en SQLite, descargar sus canciones con metadatos y analizar su BPM.
+en SQLite, descargar sus canciones con metadatos y BPM (cálculo automático),
+y crear playlists en Spotify o YouTube.
 
 ## Estructura
 
@@ -66,6 +67,8 @@ Al instalar el paquete se registra el comando `gestor-listas`:
 
 ```bash
 gestor-listas sync                       # Importar playlists de sources.json a SQLite
+gestor-listas sync -s spotify            # Importar solo Spotify
+gestor-listas sync -s spotify youtube    # Importar Spotify y YouTube
 gestor-listas list                       # Listar playlists almacenadas
 gestor-listas list -s spotify            # Filtrar por fuente (spotify/deezer/youtube)
 gestor-listas download                   # Descargar canciones de todas las playlists
@@ -105,14 +108,17 @@ Opciones de `download`: `-o/--output` (carpeta destino, por defecto `downloads`)
 Desde la CLI:
 
 ```bash
-gestor-listas sync
+gestor-listas sync                  # Todos los proveedores
+gestor-listas sync -s spotify       # Solo Spotify
+gestor-listas sync -s spotify deezer  # Spotify y Deezer
 ```
 
 O desde Python:
 
 ```python
 from gestor_listas import sync
-sync.run()
+sync.run()                                   # Todos los proveedores
+sync.run(sources_filter=["spotify"])          # Solo Spotify
 ```
 
 Esto lee `sources.json`, obtiene las playlists de cada servicio y las guarda
@@ -149,9 +155,26 @@ results = manager.download_from_storage(source="spotify", limit=10)
 
 ## Análisis de BPM
 
-`bpm_analyzer.analyze_directory()` recorre una carpeta, calcula el BPM de cada
-archivo de audio (vía `ffmpeg` + autocorrelación de energía) y lo escribe en sus
-etiquetas. Formatos soportados: `mp3`, `flac`, `ogg`, `m4a`, `wav`, `opus`, `wma`.
+El BPM se calcula **automáticamente** durante la descarga de cada canción (tanto
+desde Deezer como desde YouTube). Para archivos existentes (o externos) puedes
+usar el CLI o la API:
+
+```bash
+gestor-listas bpm ./downloads            # Analizar todo el directorio
+gestor-listas bpm ./downloads -f         # Forzar re-análisis aunque ya tengan BPM
+gestor-listas bpm ./downloads -e mp3,flac  # Solo ciertas extensiones
+```
+
+El algoritmo:
+1. Decodifica el audio con `ffmpeg` a mono 22 kHz
+2. Calcula la envolvente RMS y la filtra (Butterworth 0.5–5 Hz ≈ 30–300 BPM)
+3. Aplica autocorrelación y busca el pico más fuerte en el rango [60, 240 BPM]
+4. **Corrección armónica**: si el pico principal es < 100 BPM, busca armónicos
+   (2×, 3×, 4×) entre los demás picos
+5. **Detección de contratiempo**: si el doble BPM tiene autocorrelación
+   fuertemente negativa, se usa ese (típico en música bailable)
+
+Formatos soportados: `mp3`, `flac`, `ogg`, `opus`, `m4a`, `aac`, `wav`, `wma`.
 
 ```python
 from pathlib import Path
