@@ -176,7 +176,7 @@ Premium. Este proyecto ofrece alternativas que no lo requieren:
 |------|-----|-------------|
 | **Scraping** (por defecto) | `SpotifyProvider(use_scraping=True)` | Solo lectura de playlists públicas por URL. Sin límites de tasa. |
 | Bearer token | `SpotifyProvider(bearer_token="...")` o `SPOTIFY_BEARER_TOKEN` en `.env` | Token extraído del navegador (~1h de validez). Permite leer y escribir. |
-| Client credentials | `SpotifyProvider(use_client_credentials=True)` | Usa credenciales de spotDL. Solo lectura pública. Sin límite de tasa tras 24h. |
+| Client credentials | `SpotifyProvider(use_client_credentials=True)` | Usa credenciales públicas de spotDL (sobrescribibles con `SPOTDL_CLIENT_ID`/`SPOTDL_CLIENT_SECRET`). Solo lectura pública. Sin límite de tasa tras 24h. |
 | OAuth | `SpotifyProvider.authenticate()` | Requiere Premium. Bloqueado para cuentas Free. |
 
 ### YouTube
@@ -187,16 +187,41 @@ sortear algunas restricciones de extracción.
 
 ## Almacenamiento local
 
-Los datos se guardan en `data/gestor.db` (SQLite, modo WAL) con tres tablas:
+Los datos se guardan en `data/gestor.db` (SQLite, modo WAL) con dos tablas:
 
 - **playlists**: metadatos de cada lista
 - **tracks**: canciones de cada playlist (con `position` para preservar el orden)
-- **track_mappings**: relaciones entre IDs de Spotify y Deezer
+
+`Storage` es un context manager, por lo que la conexión se cierra sola:
+
+```python
+from gestor_listas.storage import Storage
+
+with Storage() as storage:
+    playlists = storage.load_all_playlists()
+```
 
 ## Tests
 
+Instala las dependencias de desarrollo y ejecuta la suite:
+
 ```bash
-pytest -v
+pip install -e ".[dev]"
+pytest
+```
+
+La configuración de `pytest` (en `pyproject.toml`) mide la cobertura y exige un
+mínimo del **70%** (`--cov-fail-under=70`). Para ver el informe detallado:
+
+```bash
+pytest --cov-report=term-missing
+```
+
+Las pruebas que necesitan red o binarios externos (`ffmpeg`, `yt-dlp`) están
+marcadas como `integration` y **no** se ejecutan por defecto. Para incluirlas:
+
+```bash
+pytest -m integration
 ```
 
 ## Configuración
