@@ -34,13 +34,18 @@ class TestDetectBpm:
 
         audio_file = tmp_path / "song.mp3"
         audio_file.write_bytes(b"x")
-        mocker.patch("gestor_listas.audio.subprocess.run", side_effect=FileNotFoundError)
+        # Si no hay ffmpeg (ni sistema ni imageio), resolve_ffmpeg lanza DownloadError.
+        mocker.patch(
+            "gestor_listas.audio.resolve_ffmpeg",
+            side_effect=DownloadError("No se encontró ffmpeg."),
+        )
         with pytest.raises(DownloadError, match="ffmpeg"):
             detect_bpm(audio_file)
 
     def test_ffmpeg_failure_returns_none(self, tmp_path, mocker) -> None:
         audio_file = tmp_path / "song.mp3"
         audio_file.write_bytes(b"x")
+        mocker.patch("gestor_listas.audio.resolve_ffmpeg", return_value="ffmpeg")
         mocker.patch(
             "gestor_listas.audio.subprocess.run",
             return_value=mocker.Mock(returncode=1, stdout="", stderr="err"),

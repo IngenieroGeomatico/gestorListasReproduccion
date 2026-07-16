@@ -26,6 +26,14 @@ downloads/
 *.db
 .cache
 
+# ffmpeg / binarios externos (por si se colocan localmente en el repo)
+bin/
+ffmpeg
+ffmpeg.exe
+ffmpeg-*
+ffprobe
+ffprobe.exe
+
 # OS artifacts
 .DS_Store
 Thumbs.db

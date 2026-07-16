@@ -10,7 +10,7 @@ from scipy.signal import butter, sosfilt
 
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, error as MutagenError
 
-from .errors import DownloadError
+from .config import resolve_ffmpeg
 
 # Mapping de género obtenido de Deezer genre.getData (0-200, más IDs dispersos)
 DEEZER_GENRE_MAP: dict[int, str] = {
@@ -214,11 +214,13 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
     if not audio_path.exists():
         return None
 
+    ffmpeg_exe = resolve_ffmpeg()
+
     with tempfile.NamedTemporaryFile(suffix=".raw", delete=True) as tmp:
         tmp_path = tmp.name
 
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_exe, "-y",
             "-i", str(audio_path),
             "-t", str(max_duration),
             "-acodec", "pcm_s16le",
@@ -228,13 +230,7 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
             tmp_path,
         ]
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        except FileNotFoundError:
-            raise DownloadError(
-                "ffmpeg no está instalado o no está en el PATH. "
-                "Instálalo para poder analizar el BPM."
-            )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             return None
 

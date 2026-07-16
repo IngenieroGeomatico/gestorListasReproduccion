@@ -33,8 +33,10 @@ data/
 └── sources.json        # URLs de playlists a importar
 ```
 
-> Requisito externo: **ffmpeg** debe estar en el `PATH` para descargar audio y
-> analizar BPM. La descarga desde YouTube usa **yt-dlp** (se instala con el paquete).
+> **ffmpeg** se usa para descargar audio y analizar BPM. **No hace falta
+> instalarlo aparte**: se incluye vía el paquete `imageio-ffmpeg` (multiplataforma).
+> Si ya tienes un `ffmpeg` en el `PATH`, se usa ese preferentemente. La descarga
+> desde YouTube usa **yt-dlp** (se instala con el paquete).
 
 ## Instalación
 

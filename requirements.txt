@@ -9,3 +9,4 @@ scipy>=1.14
 cryptography>=44.0
 requests>=2.32
 yt-dlp>=2026.07
+imageio-ffmpeg>=0.5
