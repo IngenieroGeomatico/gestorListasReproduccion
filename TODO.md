@@ -16,6 +16,41 @@ contexto necesario para retomarlas.
       metadatos del fichero de forma transversal. Interpolación parabólica del pico
       para precisión sub-lag. Validado con señales sintéticas 90-175 BPM (±2 BPM).
 
+#### Validación pendiente del nuevo algoritmo de BPM
+
+El rediseño está probado con **señales sintéticas** (kicks limpios generados por
+código), lo que confirma que la matemática es correcta, pero **aún no se ha
+validado con música real**. Pruebas necesarias antes de darlo por bueno:
+
+- [ ] **Batería de referencia con BPM conocido.** Reunir 15-20 temas cuyo BPM real
+      se conozca (de la carátula, Beatport, MixMeister o contando a mano),
+      cubriendo: hardstyle/hardcore (150-180), techno (125-150), trance/remember
+      (138-150), house (120-128), pop/rock (90-130) y alguna balada (70-90).
+      Ejecutar `detect_bpm` en cada uno y anotar detectado vs real.
+- [ ] **Medir tasa de acierto.** Objetivo: acierto exacto (±2 BPM) y detectar
+      errores de octava (mitad/doble). Registrar % de aciertos por género para
+      saber dónde falla.
+- [ ] **Casos límite explícitos:**
+      - Tema EDM **sin tag de género** → debe caer en el prior balanceado; verificar
+        que aun así acierta (rango 70-190) o documentar si necesita el tag.
+      - Género en el tag que **no** contenga una palabra clave de `_EDM_GENRE_KEYWORDS`
+        (p. ej. "Hard Dance" variantes, subgéneros raros) → ampliar la lista si falla.
+      - Temas con **intro larga sin percusión** (los primeros 60 s son ambient):
+        `detect_bpm` solo analiza `max_duration=60` s desde el inicio. Evaluar si
+        conviene saltar la intro o analizar un tramo central.
+      - Temas con **cambios de tempo** o breakdowns → confirmar comportamiento.
+- [ ] **Calibrar priors con datos reales.** Ajustar `_PRIOR_EDM` / `_PRIOR_DEFAULT`
+      (center, sigma, min/max_bpm) en `audio.py` según los resultados de la batería.
+      Los valores actuales (EDM 155/0.45, default 125/0.55) son de partida.
+- [ ] **Comparar contra el algoritmo viejo** en los mismos temas, para confirmar
+      que el nuevo mejora de verdad y no introduce regresiones en música normal.
+- [ ] **Comando de validación reproducible.** Considerar un pequeño script o test
+      `integration` que reciba una carpeta con un CSV `fichero,bpm_real` y reporte
+      la tasa de acierto, para poder re-validar tras cada cambio de parámetros.
+- [ ] **Verificar re-análisis con `-f`.** `gestor-listas bpm ./downloads -f` debe
+      recalcular y sobreescribir BPMs viejos correctamente en todos los formatos
+      (mp3/flac/opus/ogg/m4a).
+
 ## Verificación end-to-end pendiente
 
 Estas partes están implementadas y con tests (mocks), pero **no se han probado
