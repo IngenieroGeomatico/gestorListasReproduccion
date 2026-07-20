@@ -8,6 +8,7 @@ from typing import Optional
 from ..config import resolve_ffmpeg
 from ..errors import DownloadError
 from ..model import Track
+from ..util import safe_filename
 
 
 def _ffmpeg_location() -> Optional[str]:
@@ -68,7 +69,7 @@ class YouTubeDownloader:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_name = f"{track.artist} - {track.title}".replace("/", "_").replace("\0", "")
+        safe_name = safe_filename(f"{track.artist} - {track.title}")
         output_template = str(output_dir / f"{safe_name}.%(ext)s")
 
         cmd = self._build_cmd(self._get_url(track), output_template)

@@ -121,6 +121,11 @@ class TestReadExistingBpmByFormat:
         fake.return_value = {"BPM": ["140"]}
         assert read_existing_bpm(tmp_path / "song.ogg") == 140.0
 
+    def test_opus_reads_bpm_key(self, tmp_path, mocker) -> None:
+        fake = mocker.patch("gestor_listas.bpm_analyzer.OggOpus")
+        fake.return_value = {"BPM": ["135"]}
+        assert read_existing_bpm(tmp_path / "song.opus") == 135.0
+
     def test_flac_without_bpm_returns_none(self, tmp_path, mocker) -> None:
         fake = mocker.patch("gestor_listas.bpm_analyzer.FLAC")
         fake.return_value = {}
@@ -149,6 +154,15 @@ class TestWriteBpmByFormat:
         instance = mocker.MagicMock()
         instance.__setitem__.side_effect = tags.__setitem__
         mocker.patch("gestor_listas.bpm_analyzer.OggVorbis", return_value=instance)
+
+        assert write_bpm(tmp_path / "song.ogg", 128.0) is True
+        assert tags["BPM"] == ["128"]
+
+    def test_opus_writes_bpm_key(self, tmp_path, mocker) -> None:
+        tags: dict = {}
+        instance = mocker.MagicMock()
+        instance.__setitem__.side_effect = tags.__setitem__
+        mocker.patch("gestor_listas.bpm_analyzer.OggOpus", return_value=instance)
 
         assert write_bpm(tmp_path / "song.opus", 128.0) is True
         assert tags["BPM"] == ["128"]

@@ -5,6 +5,39 @@ import pytest
 from gestor_listas import errors
 from gestor_listas.config import DeezerConfig, SpotifyConfig, resolve_ffmpeg
 from gestor_listas.http import make_session
+from gestor_listas.util import safe_filename
+
+
+class TestSafeFilename:
+    def test_keeps_normal_names(self) -> None:
+        assert safe_filename("Queen - Bohemian Rhapsody") == "Queen - Bohemian Rhapsody"
+
+    def test_preserves_accents_and_parens(self) -> None:
+        assert safe_filename("Café Tacvba (En vivo)") == "Café Tacvba (En vivo)"
+
+    def test_replaces_windows_invalid_chars(self) -> None:
+        assert safe_filename('a/b\\c:d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
+
+    def test_replaces_nul(self) -> None:
+        assert safe_filename("a\0b") == "a_b"
+
+    def test_strips_trailing_dots_and_spaces(self) -> None:
+        assert safe_filename("nombre...  ") == "nombre"
+
+    def test_truncates_to_max_length(self) -> None:
+        assert safe_filename("x" * 500, max_length=64) == "x" * 64
+
+    def test_empty_returns_fallback(self) -> None:
+        assert safe_filename("") == "untitled"
+        assert safe_filename("///", fallback="playlist") == "playlist"
+
+    def test_windows_reserved_name_is_prefixed(self) -> None:
+        assert safe_filename("CON") == "_CON"
+        assert safe_filename("nul.mp3") == "_nul.mp3"
+
+    def test_reserved_substring_is_allowed(self) -> None:
+        # "CONcierto" no es un nombre reservado, no debe prefijarse.
+        assert safe_filename("CONcierto") == "CONcierto"
 
 
 class TestErrorsHierarchy:

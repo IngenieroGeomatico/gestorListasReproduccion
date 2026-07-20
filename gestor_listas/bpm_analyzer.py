@@ -53,8 +53,14 @@ def read_existing_bpm(filepath: Path) -> Optional[float]:
                 return float(tbpm.text[0])
         elif ext == ".flac":
             tags = FLAC(str(filepath))
+            bpm = tags.get("BPM")
+            if bpm:
+                return float(bpm[0])
         elif ext == ".opus":
             tags = OggOpus(str(filepath))
+            bpm = tags.get("BPM")
+            if bpm:
+                return float(bpm[0])
         elif ext == ".ogg":
             tags = OggVorbis(str(filepath))
             bpm = tags.get("BPM")
