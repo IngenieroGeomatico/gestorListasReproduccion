@@ -99,15 +99,7 @@ class DeezerProvider(Provider):
         tracks: list[Track] = []
         if load_tracks:
             data = self._gw("playlist.getSongs", {"PLAYLIST_ID": item["PLAYLIST_ID"], "nb": -1})
-            for t in data.get("data", []):
-                tracks.append(Track(
-                    id=str(t["SNG_ID"]),
-                    title=t["SNG_TITLE"],
-                    artist=t.get("ART_NAME", ""),
-                    album=t.get("ALB_TITLE"),
-                    duration_ms=t.get("DURATION", 0) * 1000,
-                    uri=f"deezer://track/{t['SNG_ID']}",
-                ))
+            tracks = [Track.from_deezer_gw(t) for t in data.get("data", [])]
         return Playlist(
             id=str(item["PLAYLIST_ID"]),
             name=item.get("TITLE", ""),
@@ -157,15 +149,7 @@ class DeezerProvider(Provider):
         if load_tracks:
             pl_tracks = self._gw("playlist.getSongs", {"PLAYLIST_ID": int(playlist_id), "nb": -1})
             track_data = pl_tracks["data"] if isinstance(pl_tracks, dict) and "data" in pl_tracks else pl_tracks if isinstance(pl_tracks, list) else []
-            for t in track_data:
-                tracks.append(Track(
-                    id=str(t["SNG_ID"]),
-                    title=t.get("SNG_TITLE", ""),
-                    artist=t.get("ART_NAME", ""),
-                    album=t.get("ALB_TITLE"),
-                    duration_ms=t.get("DURATION", 0) * 1000,
-                    uri=f"deezer://track/{t['SNG_ID']}",
-                ))
+            tracks = [Track.from_deezer_gw(t) for t in track_data]
         data = pl_metadata.get("DATA", {})
         return Playlist(
             id=str(data.get("PLAYLIST_ID", playlist_id)),

@@ -8,6 +8,7 @@ from typing import Optional
 
 from ..model import Playlist, Track
 from ..storage import Storage
+from ..util import safe_filename
 from .deezer import DeezerDownloader
 from .youtube import YouTubeDownloader
 
@@ -67,8 +68,7 @@ class DownloadManager:
     ) -> list[DownloadResult]:
         dest = self.output_dir
         if use_subfolder:
-            safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in playlist.name).strip()
-            safe = safe[:64]
+            safe = safe_filename(playlist.name, max_length=64, fallback="playlist")
             dest = self.output_dir / safe
             dest.mkdir(parents=True, exist_ok=True)
 

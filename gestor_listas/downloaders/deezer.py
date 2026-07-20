@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from ..errors import DownloadError
 from ..http import make_session
 from ..model import Track
 from ..providers.deezer import DeezerProvider
+from ..util import safe_filename
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class DeezerDownloader:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_name = f"{track.artist} - {track.title}".replace("/", "_").replace("\0", "")
+        safe_name = safe_filename(f"{track.artist} - {track.title}")
         output_path = output_dir / f"{safe_name}.mp3"
 
         if output_path.exists():
@@ -181,8 +181,10 @@ class DeezerDownloader:
         genre = _genre_name(genre_id)
 
         # Calculamos el BPM antes de escribir para hacer una sola pasada de tags.
+        # Pasamos el género explícito (el fichero aún no tiene tags) para elegir
+        # el tempo prior adecuado (EDM vs balanceado).
         try:
-            bpm = detect_bpm(mp3_path)
+            bpm = detect_bpm(mp3_path, genre=genre)
         except Exception:
             bpm = None
 

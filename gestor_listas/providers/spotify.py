@@ -31,19 +31,9 @@ PLAYLIST_URL_RE = re.compile(
 )
 
 
-def _track_from_sp_item(item: dict) -> Optional[Track]:
-    t = item.get("track") or item
-    if not t or not t.get("id"):
-        return None
-    return Track(
-        id=t["id"],
-        title=t["name"],
-        artist=t["artists"][0]["name"] if t.get("artists") else "Unknown",
-        album=t["album"]["name"] if t.get("album") else None,
-        duration_ms=t.get("duration_ms"),
-        isrc=t.get("external_ids", {}).get("isrc") if isinstance(t.get("external_ids"), dict) else None,
-        uri=t.get("uri"),
-    )
+# El mapeo vive en Track.from_spotify_item; se mantiene este alias porque los
+# call-sites y algún test lo referencian por nombre de módulo.
+_track_from_sp_item = Track.from_spotify_item
 
 
 class SpotifyProvider(Provider):

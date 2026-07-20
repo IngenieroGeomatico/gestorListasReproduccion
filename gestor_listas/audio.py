@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, sosfilt, stft
 
+from mutagen import File as MutagenFile
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, error as MutagenError
 
 from .config import resolve_ffmpeg
@@ -209,7 +210,160 @@ def write_id3_tags(
     tags.save(str(path))
 
 
-def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[float]:
+# ── Detección de BPM ─────────────────────────────────────────────
+
+_SAMPLE_RATE = 22050
+_HOP_LENGTH = 512
+_FRAME_LENGTH = 2048
+# Frecuencia de frames de la envolvente de onset: 22050/512 ≈ 43.07 Hz.
+_ENVELOPE_RATE = _SAMPLE_RATE / _HOP_LENGTH
+
+# Palabras clave (en el nombre de género) que indican música electrónica de
+# baile con pulso rápido y marcado (hardstyle, techno, trance, remember...).
+# La comparación es en minúsculas y por subcadena, así que "Techno/House"
+# o "Hard Trance" también encajan.
+_EDM_GENRE_KEYWORDS = (
+    "techno", "house", "trance", "hardstyle", "hardcore", "hard dance",
+    "dubstep", "drum & bass", "drum and bass", "dnb", "electro", "edm",
+    "dancefloor", "dance", "rave", "gabber", "psytrance", "bigroom",
+    "big room", "remember", "makina", "jumpstyle", "hands up", "hardtek",
+)
+
+# Parámetros del "tempo prior" log-normal según el tipo de música.
+# - center: BPM perceptual más probable (centro de la campana).
+# - sigma: anchura en octavas (log2). Un sigma amplio apenas sesga;
+#   uno estrecho fuerza el rango objetivo.
+# - min_bpm/max_bpm: ventana de búsqueda de la autocorrelación.
+_PRIOR_EDM = {"center": 155.0, "sigma": 0.45, "min_bpm": 120, "max_bpm": 185}
+_PRIOR_DEFAULT = {"center": 125.0, "sigma": 0.55, "min_bpm": 70, "max_bpm": 190}
+
+
+def read_genre_tag(filepath: str | Path) -> Optional[str]:
+    """Lee el género desde los metadatos del fichero de audio, transversal a
+    formato (MP3/ID3, FLAC/Ogg/Opus Vorbis, MP4/M4A). Devuelve None si no hay.
+
+    Usa mutagen en modo genérico (easy) para no depender del contenedor: la
+    clave 'genre' está expuesta de forma uniforme para los formatos comunes.
+    """
+    try:
+        tags = MutagenFile(str(filepath), easy=True)
+    except Exception:
+        return None
+    if not tags:
+        return None
+    value = tags.get("genre")
+    if not value:
+        return None
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if not value:
+        return None
+    return str(value).strip() or None
+
+
+def is_edm_genre(genre: Optional[str]) -> bool:
+    """True si el género sugiere electrónica de baile de pulso rápido."""
+    if not genre:
+        return False
+    g = genre.lower()
+    return any(keyword in g for keyword in _EDM_GENRE_KEYWORDS)
+
+
+def _spectral_flux_envelope(samples: np.ndarray) -> Optional[np.ndarray]:
+    """Envolvente de onset por flujo espectral (suma de incrementos positivos
+    de magnitud entre frames consecutivos del espectrograma).
+
+    El flujo espectral detecta transitorios (golpes de bombo) mucho mejor que
+    la energía RMS, que se diluye con bajos/sintes sostenidos típicos de EDM.
+    """
+    _, _, zxx = stft(
+        samples,
+        fs=_SAMPLE_RATE,
+        nperseg=_FRAME_LENGTH,
+        noverlap=_FRAME_LENGTH - _HOP_LENGTH,
+        boundary=None,
+        padded=False,
+    )
+    if zxx.shape[1] < 4:
+        return None
+    spec = np.abs(zxx)
+    # Incrementos positivos de magnitud por banda, sumados sobre el espectro.
+    diff = np.diff(spec, axis=1, prepend=spec[:, :1])
+    onset_env = np.sum(np.maximum(0.0, diff), axis=0)
+    return onset_env
+
+
+def _tempo_from_envelope(onset_env: np.ndarray, prior: dict) -> Optional[float]:
+    """Estima el tempo de una envolvente de onset con autocorrelación sesgada
+    ponderada por un tempo prior log-normal (resuelve errores de octava)."""
+    min_bpm, max_bpm = prior["min_bpm"], prior["max_bpm"]
+    min_lag = int(_ENVELOPE_RATE * 60.0 / max_bpm)
+    max_lag = int(_ENVELOPE_RATE * 60.0 / min_bpm)
+    if min_lag < 1 or max_lag <= min_lag:
+        return None
+
+    env = onset_env - np.mean(onset_env)
+    # Bandpass sobre la envolvente ceñido al rango de búsqueda de tempo.
+    nyq = _ENVELOPE_RATE / 2.0
+    low = (min_bpm / 60.0) / nyq
+    high = (max_bpm / 60.0) / nyq
+    if not (0 < low < high < 1):
+        return None
+    sos = butter(2, [low, high], btype="band", output="sos")
+    env = sosfilt(sos, env)
+
+    if len(env) < max_lag + 2:
+        return None
+
+    # Autocorrelación sesgada (no normalizada): penaliza lags largos = tempos
+    # lentos, lo cual es deseable (Oracle). Nos quedamos con la mitad positiva.
+    autocorr = np.correlate(env, env, mode="full")
+    mid = len(autocorr) // 2
+    ac = autocorr[mid + min_lag: mid + max_lag + 1]
+    if len(ac) < 2:
+        return None
+
+    lags = np.arange(min_lag, min_lag + len(ac))
+    bpms = 60.0 * _ENVELOPE_RATE / lags
+
+    # Tempo prior log-normal: campana en log2(bpm) centrada en 'center'.
+    log_ratio = np.log2(bpms / prior["center"])
+    prior_weights = np.exp(-0.5 * (log_ratio / prior["sigma"]) ** 2)
+
+    weighted = np.maximum(0.0, ac) * prior_weights
+    if not np.any(weighted > 0):
+        return None
+
+    best_idx = int(np.argmax(weighted))
+
+    # Interpolación parabólica alrededor del pico para precisión sub-lag: la
+    # autocorrelación está muestreada en lags enteros y a ~43 Hz de frame rate
+    # cada lag equivale a varios BPM, lo que introduce un sesgo de cuantización.
+    lag = float(min_lag + best_idx)
+    if 0 < best_idx < len(ac) - 1:
+        y0, y1, y2 = ac[best_idx - 1], ac[best_idx], ac[best_idx + 1]
+        denom = y0 - 2.0 * y1 + y2
+        if denom != 0:
+            offset = 0.5 * (y0 - y2) / denom
+            if -1.0 < offset < 1.0:
+                lag += offset
+
+    return float(60.0 * _ENVELOPE_RATE / lag)
+
+
+def detect_bpm(
+    audio_path: str | Path,
+    max_duration: float = 60.0,
+    genre: Optional[str] = None,
+) -> Optional[float]:
+    """Detecta el BPM de un fichero de audio.
+
+    El género (si se pasa, o si se lee de los metadatos del propio fichero)
+    ajusta el "tempo prior": los géneros de electrónica de baile usan un prior
+    centrado en ~150 BPM (rango 120-185), el resto uno balanceado ~125 BPM
+    (rango 70-190). Así se resuelven correctamente los errores de octava tanto
+    en hardstyle/techno como en pop/rock/baladas.
+    """
     audio_path = Path(audio_path)
     if not audio_path.exists():
         return None
@@ -224,7 +378,7 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
             "-i", str(audio_path),
             "-t", str(max_duration),
             "-acodec", "pcm_s16le",
-            "-ar", "22050",
+            "-ar", str(_SAMPLE_RATE),
             "-ac", "1",
             "-f", "s16le",
             tmp_path,
@@ -240,79 +394,15 @@ def detect_bpm(audio_path: str | Path, max_duration: float = 60.0) -> Optional[f
 
         samples = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
 
-    hop_length = 512
-    frame_length = 2048
-    num_frames = (len(samples) - frame_length) // hop_length
-    if num_frames < 10:
+    # Elegir el prior por género: parámetro explícito o tag del fichero.
+    genre = genre if genre is not None else read_genre_tag(audio_path)
+    prior = _PRIOR_EDM if is_edm_genre(genre) else _PRIOR_DEFAULT
+
+    onset_env = _spectral_flux_envelope(samples)
+    if onset_env is None or len(onset_env) < 16:
         return None
 
-    # Energía RMS por frame, vectorizada: construimos una vista deslizante
-    # (num_frames, frame_length) sin copiar y calculamos el RMS por filas.
-    frame_starts = np.arange(num_frames) * hop_length
-    frames = samples[frame_starts[:, None] + np.arange(frame_length)]
-    energy = np.sqrt(np.mean(frames ** 2, axis=1))
-
-    energy = energy - np.mean(energy)
-    sos = butter(4, [0.5 / (22050 / (2 * hop_length)), 5.0 / (22050 / (2 * hop_length))], btype="band", output="sos")
-    envelope = sosfilt(sos, energy)
-
-    min_bpm, max_bpm = 60, 240
-    min_lag = int(22050 * 60.0 / max_bpm / hop_length)
-    max_lag = int(22050 * 60.0 / min_bpm / hop_length)
-
-    if len(envelope) < max_lag * 2:
+    bpm = _tempo_from_envelope(onset_env, prior)
+    if bpm is None:
         return None
-
-    autocorr = np.correlate(envelope, envelope, mode="full")
-    mid = len(autocorr) // 2
-    ac = autocorr[mid + min_lag:mid + max_lag + 1]
-
-    if len(ac) < 2:
-        return None
-
-    # Encontrar todos los picos locales positivos de autocorrelación.
-    peaks = []
-    for i in range(len(ac)):
-        if ac[i] <= 0:
-            continue
-        left_ok = (i == 0) or (ac[i] >= ac[i - 1])
-        right_ok = (i == len(ac) - 1) or (ac[i] >= ac[i + 1])
-        if left_ok and right_ok:
-            l = min_lag + i
-            b = 60.0 / (l * hop_length / 22050.0)
-            peaks.append((ac[i], l, b))
-
-    if not peaks:
-        peak_idx = np.argmax(ac)
-        best_lag = min_lag + peak_idx
-        bpm = 60.0 / (best_lag * hop_length / 22050.0)
-        return round(bpm, 1)
-
-    # Elegir el pico más fuerte como candidato principal.
-    peaks.sort(key=lambda x: -x[0])
-    best_val, best_lag, best_bpm = peaks[0]
-
-    # Si el candidato está por debajo del rango bailable (< 100 BPM),
-    # buscar un armónico más rápido (2×, 3×, 4×) entre los picos.
-    if best_bpm < 100:
-        found_harmonic = False
-        for factor, tol in [(2, 0.1), (3, 0.15), (4, 0.2)]:
-            target = best_bpm * factor
-            for val, lag, bpm in peaks[1:]:
-                ratio = bpm / target
-                if 1.0 - tol <= ratio <= 1.0 + tol and val >= best_val * 0.7:
-                    best_val, best_lag, best_bpm = val, lag, bpm
-                    found_harmonic = True
-                    break
-            if found_harmonic:
-                break
-        if not found_harmonic:
-            # Si no hay armónico positivo, comprobar contratiempo negativo (2×)
-            double_lag = best_lag / 2
-            if min_lag <= double_lag <= max_lag:
-                idx = int(round(double_lag - min_lag))
-                if 0 <= idx < len(ac) and ac[idx] < best_val * -0.7:
-                    best_lag = double_lag
-                    best_bpm = 60.0 / (best_lag * hop_length / 22050.0)
-
-    return round(best_bpm, 1)
+    return round(bpm, 1)
