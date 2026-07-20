@@ -181,8 +181,10 @@ class DeezerDownloader:
         genre = _genre_name(genre_id)
 
         # Calculamos el BPM antes de escribir para hacer una sola pasada de tags.
+        # Pasamos el género explícito (el fichero aún no tiene tags) para elegir
+        # el tempo prior adecuado (EDM vs balanceado).
         try:
-            bpm = detect_bpm(mp3_path)
+            bpm = detect_bpm(mp3_path, genre=genre)
         except Exception:
             bpm = None
 

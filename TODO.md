@@ -8,9 +8,13 @@ contexto necesario para retomarlas.
 ### Mejorar detección de BPM
 
 - [x] Arreglado escritura BPM en `.opus` (usar `OggOpus` en lugar de `OggVorbis`)
-- [x] Mejorada detección de contratiempo (autocorrelación negativa → doble BPM)
-- [x] Ampliado rango de búsqueda a [60, 240] BPM con corrección armónica (2×, 3×, 4×)
-- [ ] **Pendiente:** la autocorrelación de envolvente RMS falla en temas donde el pulso real no produce un pico positivo claro. Evaluar migrar a `librosa.beat.beat_track` (más preciso, pero añade dependencia pesada: numba, scikit-learn) o implementar detección por onset strength.
+- [x] Arreglada lectura de BPM en `.flac` y `.opus` (no leía la clave del tag)
+- [x] **Rediseño del algoritmo (sin librosa):** sustituida la envolvente de energía
+      RMS por **flujo espectral** (STFT) — detecta mucho mejor los kicks de EDM.
+      Añadido **tempo prior log-normal** que resuelve errores de octava, con perfil
+      según género (EDM ~155 BPM vs balanceado ~125), leyendo el género de los
+      metadatos del fichero de forma transversal. Interpolación parabólica del pico
+      para precisión sub-lag. Validado con señales sintéticas 90-175 BPM (±2 BPM).
 
 ## Verificación end-to-end pendiente
 
