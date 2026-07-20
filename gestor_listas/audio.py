@@ -223,10 +223,11 @@ _ENVELOPE_RATE = _SAMPLE_RATE / _HOP_LENGTH
 # La comparación es en minúsculas y por subcadena, así que "Techno/House"
 # o "Hard Trance" también encajan.
 _EDM_GENRE_KEYWORDS = (
-    "techno", "house", "trance", "hardstyle", "hardcore", "hard dance",
-    "dubstep", "drum & bass", "drum and bass", "dnb", "electro", "edm",
-    "dancefloor", "dance", "rave", "gabber", "psytrance", "bigroom",
-    "big room", "remember", "makina", "jumpstyle", "hands up", "hardtek",
+    "techno", "house", "trance", "hardstyle", "hardcore", "frenchcore",
+    "hard dance", "dubstep", "drum & bass", "drum and bass", "dnb",
+    "electro", "edm", "dancefloor", "dance", "rave", "gabber",
+    "psytrance", "bigroom", "big room", "remember", "makina",
+    "jumpstyle", "hands up", "hardtek", "uptempo", "speedcore",
 )
 
 # Parámetros del "tempo prior" log-normal según el tipo de música.
@@ -234,7 +235,7 @@ _EDM_GENRE_KEYWORDS = (
 # - sigma: anchura en octavas (log2). Un sigma amplio apenas sesga;
 #   uno estrecho fuerza el rango objetivo.
 # - min_bpm/max_bpm: ventana de búsqueda de la autocorrelación.
-_PRIOR_EDM = {"center": 155.0, "sigma": 0.45, "min_bpm": 120, "max_bpm": 185}
+_PRIOR_EDM = {"center": 170.0, "sigma": 0.48, "min_bpm": 120, "max_bpm": 210}
 _PRIOR_DEFAULT = {"center": 125.0, "sigma": 0.55, "min_bpm": 70, "max_bpm": 190}
 
 
@@ -303,12 +304,10 @@ def _tempo_from_envelope(onset_env: np.ndarray, prior: dict) -> Optional[float]:
         return None
 
     env = onset_env - np.mean(onset_env)
-    # Bandpass sobre la envolvente ceñido al rango de búsqueda de tempo.
+    # Bandpass muy amplio (30-600 BPM) para evitar distorsión de fase.
     nyq = _ENVELOPE_RATE / 2.0
-    low = (min_bpm / 60.0) / nyq
-    high = (max_bpm / 60.0) / nyq
-    if not (0 < low < high < 1):
-        return None
+    low = (30.0 / 60.0) / nyq
+    high = (600.0 / 60.0) / nyq
     sos = butter(2, [low, high], btype="band", output="sos")
     env = sosfilt(sos, env)
 
