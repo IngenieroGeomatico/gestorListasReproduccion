@@ -167,12 +167,50 @@ gestor-listas bpm ./downloads -e mp3,flac  # Solo ciertas extensiones
 
 El algoritmo:
 1. Decodifica el audio con `ffmpeg` a mono 22 kHz
-2. Calcula la envolvente RMS y la filtra (Butterworth 0.5–5 Hz ≈ 30–300 BPM)
-3. Aplica autocorrelación y busca el pico más fuerte en el rango [60, 240 BPM]
-4. **Corrección armónica**: si el pico principal es < 100 BPM, busca armónicos
-   (2×, 3×, 4×) entre los demás picos
-5. **Detección de contratiempo**: si el doble BPM tiene autocorrelación
-   fuertemente negativa, se usa ese (típico en música bailable)
+2. Calcula la envolvente de onset por **flujo espectral** (STFT), que detecta los
+   transitorios (kicks) mucho mejor que la energía RMS
+3. Aplica autocorrelación sesgada sobre una **ventana ancha fija (60–240 BPM)**
+4. **Tempo prior por familia de género**: pondera los picos con una campana
+   log-normal (en log2 del BPM) centrada en el tempo típico del género. El
+   género se clasifica en familias (balada, pop/rock, hip-hop/reggaeton,
+   house/techno, trance, dnb, hardstyle...) a partir del **ID de Deezer** (camino
+   principal, independiente del idioma) o del tag de texto del fichero. Esto
+   resuelve los errores de octava según el estilo (que un hardstyle de 150 BPM no
+   se detecte como 75, ni un house de 128 como 256).
+5. **Soft prior sobre búsqueda ancha**: el prior solo *pondera*, nunca recorta la
+   búsqueda; un tema mal etiquetado (o sin tag) sigue detectando su tempo real si
+   su pico es fuerte. Sin género, se usa un prior ancho centrado en ~125 BPM.
+6. **Interpolación parabólica** del pico para precisión sub-lag.
+
+### ¿Qué pasa con un género que no está en el código?
+
+El género tiene dos usos distintos y ninguno falla ante un valor desconocido:
+
+- **Etiqueta ID3 (solo descargas de Deezer):** el nombre se traduce del `GENRE_ID`
+  con `DEEZER_GENRE_MAP`. Si el ID no está en el mapa, **no se inventa**: se omite
+  el tag de género y se registra un `logging.info` con el ID para poder añadirlo.
+- **Familia de tempo (para el prior de BPM):** `classify_genre` clasifica en cadena
+  con degradación segura:
+  1. **ID de Deezer → familia** (`DEEZER_TO_FAMILY_MAP`, independiente del idioma).
+  2. Si el ID no está mapeado pero **sí tiene nombre**, se intenta por ese nombre
+     vía palabras clave (`TEXT_TO_FAMILY_KEYWORDS`).
+  3. Si aún no encaja → familia `unknown` (prior ancho ~125 BPM), registrando un
+     `logging.debug` con el género no reconocido.
+
+Por ejemplo, **flamenco** (ID 36) está mapeado a `unknown` *a propósito*: su compás
+es demasiado variable (bulerías rápidas, soleá lenta) para un prior estrecho, así
+que el prior ancho es la mejor opción. No es un olvido, es una decisión.
+
+**Cómo añadir o reclasificar un género** (en `gestor_listas/audio.py`):
+
+| Si viene como… | Edita… | Ejemplo |
+|----------------|--------|---------|
+| ID de Deezer | `DEEZER_TO_FAMILY_MAP` | `36: "hiphop_reggaeton"` |
+| Nombre para el tag | `DEEZER_GENRE_MAP` | `210: "Nuevo Género"` |
+| Tag de texto del usuario | `TEXT_TO_FAMILY_KEYWORDS[familia]` | añadir `"flamenco"` |
+
+Activa `logging.basicConfig(level=logging.DEBUG)` para ver qué géneros caen en
+`unknown` y decidir si merece la pena mapearlos.
 
 Formatos soportados: `mp3`, `flac`, `ogg`, `opus`, `m4a`, `aac`, `wav`, `wma`.
 

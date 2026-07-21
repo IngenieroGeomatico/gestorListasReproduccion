@@ -15,6 +15,18 @@ contexto necesario para retomarlas.
       según género (EDM ~155 BPM vs balanceado ~125), leyendo el género de los
       metadatos del fichero de forma transversal. Interpolación parabólica del pico
       para precisión sub-lag. Validado con señales sintéticas 90-175 BPM (±2 BPM).
+- [x] **Sistema multi-familia de priors por género (sustituye el binario EDM):**
+      9 familias (balada, hiphop_reggaeton, pop_rock, dance_pop, house_techno,
+      trance, dnb, hardstyle_hardcore, unknown), cada una con su `TempoPrior`
+      (`center/sigma/min_bpm/max_bpm`). Clasificación vía `classify_genre`: camino
+      primario por **ID de Deezer** (`DEEZER_TO_FAMILY_MAP`, independiente del
+      idioma) y fallback por keywords de texto con precedencia explícita
+      (`FAMILY_KEYWORD_PRECEDENCE`). Cambio clave: la autocorrelación usa una
+      **ventana ancha fija** (`BPM_SEARCH_WINDOW` 60-240) y el prior solo pondera
+      (soft prior), así un tema mal etiquetado nunca queda fuera de rango. Sin tag
+      → prior `unknown` ancho ~125 BPM. `_PRIOR_EDM`/`_PRIOR_DEFAULT`/`is_edm_genre`
+      se mantienen como compatibilidad. Validado con señales sintéticas por familia
+      (75-174 BPM, ±2 BPM). Falta validar con música real (ver abajo).
 
 #### Validación pendiente del nuevo algoritmo de BPM
 
@@ -31,17 +43,21 @@ validado con música real**. Pruebas necesarias antes de darlo por bueno:
       errores de octava (mitad/doble). Registrar % de aciertos por género para
       saber dónde falla.
 - [ ] **Casos límite explícitos:**
-      - Tema EDM **sin tag de género** → debe caer en el prior balanceado; verificar
-        que aun así acierta (rango 70-190) o documentar si necesita el tag.
-      - Género en el tag que **no** contenga una palabra clave de `_EDM_GENRE_KEYWORDS`
-        (p. ej. "Hard Dance" variantes, subgéneros raros) → ampliar la lista si falla.
+      - Tema EDM **sin tag de género** → cae en el prior `unknown` (ancho, ~125,
+        rango 60-220); verificar que aun así acierta o documentar si necesita el tag.
+      - Género en el tag que **no** encaje en ninguna familia (subgéneros raros) →
+        cae en `unknown`; ampliar `TEXT_TO_FAMILY_KEYWORDS`/`DEEZER_TO_FAMILY_MAP`
+        si una familia concreta acierta mejor.
       - Temas con **intro larga sin percusión** (los primeros 60 s son ambient):
         `detect_bpm` solo analiza `max_duration=60` s desde el inicio. Evaluar si
         conviene saltar la intro o analizar un tramo central.
       - Temas con **cambios de tempo** o breakdowns → confirmar comportamiento.
-- [ ] **Calibrar priors con datos reales.** Ajustar `_PRIOR_EDM` / `_PRIOR_DEFAULT`
-      (center, sigma, min/max_bpm) en `audio.py` según los resultados de la batería.
-      Los valores actuales (EDM 155/0.45, default 125/0.55) son de partida.
+- [ ] **Calibrar priors de familia con datos reales.** Ajustar los `TempoPrior` de
+      `FAMILIES` (center, sigma, min/max_bpm) en `audio.py` según los resultados de
+      la batería. Los valores actuales están fundamentados en distribuciones de
+      tempo típicas pero solo validados con señales sintéticas.
+- [ ] **Afinar `classify_genre`** con géneros reales: revisar la precedencia de
+      `FAMILY_KEYWORD_PRECEDENCE` y ampliar `DEEZER_TO_FAMILY_MAP` con más IDs.
 - [ ] **Comparar contra el algoritmo viejo** en los mismos temas, para confirmar
       que el nuevo mejora de verdad y no introduce regresiones en música normal.
 - [ ] **Comando de validación reproducible.** Considerar un pequeño script o test

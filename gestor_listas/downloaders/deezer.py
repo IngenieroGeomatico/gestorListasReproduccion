@@ -179,12 +179,22 @@ class DeezerDownloader:
 
         from ..audio import _genre_name
         genre = _genre_name(genre_id)
+        if genre is None and genre_id is not None:
+            # Tenemos un ID de Deezer que no está en DEEZER_GENRE_MAP: no
+            # inventamos un nombre (dejaríamos el tag sin género), pero lo
+            # registramos para poder añadirlo al mapa más adelante.
+            logger.info(
+                "GENRE_ID de Deezer sin nombre en el mapa: %s (se omite el tag "
+                "de género). Añádelo a DEEZER_GENRE_MAP si quieres etiquetarlo.",
+                genre_id,
+            )
 
         # Calculamos el BPM antes de escribir para hacer una sola pasada de tags.
-        # Pasamos el género explícito (el fichero aún no tiene tags) para elegir
-        # el tempo prior adecuado (EDM vs balanceado).
+        # Pasamos el ID de género de Deezer (no el nombre): classify_genre lo
+        # mapea a familia de forma independiente del idioma (los nombres de
+        # Deezer están en francés). El nombre traducido se usa solo para el tag.
         try:
-            bpm = detect_bpm(mp3_path, genre=genre)
+            bpm = detect_bpm(mp3_path, genre=genre_id if genre_id is not None else genre)
         except Exception:
             bpm = None
 
