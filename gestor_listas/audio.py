@@ -11,7 +11,12 @@ import numpy as np
 from scipy.signal import butter, sosfilt, stft
 
 from mutagen import File as MutagenFile
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, error as MutagenError
+from mutagen.flac import FLAC
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, POPM, error as MutagenError
+from mutagen.oggopus import OggOpus
+from mutagen.oggvorbis import OggVorbis
+
+logger = logging.getLogger(__name__)
 
 from .config import resolve_ffmpeg
 
@@ -212,6 +217,62 @@ def write_id3_tags(
         tags["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover_data)
 
     tags.save(str(path))
+
+
+# ── Puntuación (estrellas) ─────────────────────────────────────
+
+# POPM (MP3): 0-255, 1 estrella = 51 (255 / 5)
+_POPM_PER_STAR = 51
+# foobar2000 POPULARIMETER: 0-100
+_PERCENT_PER_STAR = 20
+
+RATING_EMAIL = "MusicBrainz"
+
+
+def _mp3_rating(path: Path, stars: float) -> None:
+    audio = ID3(path)
+    audio.add(POPM(email=RATING_EMAIL, rating=round(stars * _POPM_PER_STAR), counter=0))
+    audio.save()
+
+
+def _vorbis_rating(audio, stars: float) -> None:
+    audio["RATING"] = str(round(stars))
+    audio["POPULARIMETER"] = str(round(stars * _PERCENT_PER_STAR))
+    audio.save()
+
+
+def _vorbis_rating_file(path: Path):
+    ext = path.suffix.lower()
+    if ext in {".ogg", ".oga"}:
+        return OggVorbis(path)
+    if ext == ".opus":
+        return OggOpus(path)
+    if ext == ".flac":
+        return FLAC(path)
+    return None
+
+
+def write_rating(filepath: str | Path, stars: float) -> bool:
+    """Guarda la puntuación (0-5 estrellas) en los metadatos del archivo.
+
+    Soporta MP3 (frame POPM) y FLAC/OGG/Opus (etiquetas RATING +
+    POPULARIMETER). Devuelve True si se escribió correctamente.
+    """
+    path = Path(filepath)
+    try:
+        ext = path.suffix.lower()
+        if ext == ".mp3":
+            _mp3_rating(path, stars)
+            return True
+        audio = _vorbis_rating_file(path)
+        if audio is not None:
+            _vorbis_rating(audio, stars)
+            return True
+        logger.warning("Formato %s no soportado para guardar puntuación.", ext)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.error("No se pudo guardar la puntuación en %s: %s", path, exc)
+        return False
 
 
 # ── Detección de BPM ─────────────────────────────────────────────

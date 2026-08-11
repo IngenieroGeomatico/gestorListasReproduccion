@@ -18,6 +18,7 @@ gestor_listas/
 ├── http.py             # Sesiones HTTP con reintentos y backoff
 ├── audio.py            # Etiquetado ID3 y detección de BPM (ffmpeg + scipy)
 ├── bpm_analyzer.py     # Análisis y escritura de BPM en un directorio
+├── renamer.py          # Renombrado por huella acústica (AcoustID + MusicBrainz)
 ├── providers/
 │   ├── base.py         # Clase abstracta Provider
 │   ├── deezer.py       # Extracción desde Deezer (ARL / email / OAuth)
@@ -76,6 +77,8 @@ gestor-listas download -p <playlist_id>  # Descargar solo una playlist
 gestor-listas download --prefer youtube  # Preferir YouTube sobre Deezer
 gestor-listas download --limit 10        # Descargar solo los primeros 10 temas
 gestor-listas bpm ./downloads            # Analizar y etiquetar BPM de un directorio
+gestor-listas rename cancion.mp3        # Identificar y renombrar por huella acústica
+gestor-listas rename ./musica -r --apply  # Renombrar toda una carpeta de verdad
 ```
 
 Opciones de `download`: `-o/--output` (carpeta destino, por defecto `downloads`),
@@ -220,6 +223,57 @@ from gestor_listas.bpm_analyzer import analyze_directory
 
 stats = analyze_directory(Path("downloads"), recursive=True, force=False)
 ```
+
+## Renombrado por huella acústica
+
+Igual que con el BPM, `gestor-listas` puede identificar una canción por su
+**forma de onda** (no por el nombre) y renombrarla con el nombre estándar
+`Artista - Título`. Es útil cuando el nombre original está totalmente mal o el
+archivo no tiene metadatos.
+
+El flujo es: **Chromaprint** genera la huella → **AcoustID** busca grabaciones
+candidatas → **MusicBrainz** aporta metadatos oficiales y la **puntuación
+comunitaria** (1-5 estrellas) → se renombra el archivo y, al aplicar, se guarda
+la puntuación en los metadatos.
+
+100% **open-source y gratuito** (AcoustID + MusicBrainz).
+
+```bash
+gestor-listas rename cancion.mp3              # Previsualización (no modifica nada)
+gestor-listas rename ~/Música -r              # Previsualización recursiva de una carpeta
+gestor-listas rename cancion.mp3 --apply      # Renombrar de verdad
+gestor-listas rename cancion.mp3 --apply --year  # "Artista - Título (Año)"
+```
+
+Opciones de `rename`: `-r/--recursive`, `--apply` (sin esto solo previsualiza),
+`--key CLAVE` (clave de AcoustID, o `ACOUSTID_API_KEY`), `--min-score 0.5`
+(puntuación mínima de coincidencia 0-1), `--year` (añade el año al nombre).
+
+```python
+from gestor_listas.renamer import run_rename
+
+stats = run_rename(["cancion.mp3"], apply=True, include_year=True)
+```
+
+- **Requisitos**: conexión a internet, una clave de AcoustID (`--key` o
+  `ACOUSTID_API_KEY`) y la librería del sistema `libchromaprint`
+  (`sudo apt install libchromaprint-tools`).
+- **Formatos soportados**: MP3, FLAC, WAV, OGG, Opus, M4A, MP4, AAC, WMA, APE,
+  ALAC.
+- **Puntuación**: la estrellas proceden del rating comunitario de MusicBrainz.
+  En MP3 se guarda en el frame **POPM** (0-255); en FLAC/OGG/Opus en las
+  etiquetas **`RATING`** (1-5) y **`POPULARIMETER`** (0-100). M4A/WAV y otros
+  formatos se omiten sin error.
+- Si la canción no está en la base de datos de AcoustID no habrá coincidencia;
+  en ese caso, si el archivo trae etiquetas internas `title`/`artist`, se usa ese
+  metadato como respaldo para el renombrado.
+  Se respeta el límite de uso de la API de MusicBrainz (~1 req/seg), con una
+  pausa de 1 segundo entre canciones.
+- **Artistas múltiples**: las etiquetas que separan varios artistas con `/`
+  (p. ej. `Javi Guzman/Belén Jurado`) se convierten en ` & ` en el nombre
+  (p. ej. `Javi Guzman & Belén Jurado - ...`).
+- **Decodificación**: para generar la huella se usa el `ffmpeg` empaquetado
+  (`imageio-ffmpeg`) si no hay uno en el `PATH` del sistema.
 
 ## Modos de autenticación
 
@@ -401,6 +455,7 @@ Las variables más importantes:
 | `SPOTIFY_BEARER_TOKEN` | Token Bearer de Spotify desde el navegador (opcional, para escritura) |
 | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` | Credenciales OAuth de Google (solo para **crear** playlists en YouTube) |
 | `YOUTUBE_REFRESH_TOKEN` | Token de refresco de YouTube (lo genera `YouTubeImporter.authenticate`) |
+| `ACOUSTID_API_KEY` | Clave de AcoustID (renombrado por huella acústica) — obtener gratis en <https://acoustid.org/new-application> |
 
 Para **leer y descargar** de YouTube no hace falta ninguna variable; solo para
 **crear** playlists.

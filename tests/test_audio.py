@@ -19,6 +19,7 @@ from gestor_listas.audio import (
     is_edm_genre,
     prior_for_genre,
     read_genre_tag,
+    write_rating,
 )
 
 
@@ -197,6 +198,45 @@ class TestReadGenreTag:
     def test_no_genre_key_returns_none(self, tmp_path, mocker) -> None:
         mocker.patch("gestor_listas.audio.MutagenFile", return_value={"artist": ["X"]})
         assert read_genre_tag(tmp_path / "song.mp3") is None
+
+
+class TestWriteRating:
+    def test_mp3_writes_popm(self, tmp_path, mocker) -> None:
+        instance = mocker.MagicMock()
+        fake = mocker.patch("gestor_listas.audio.ID3", return_value=instance)
+
+        assert write_rating(tmp_path / "song.mp3", 4.5) is True
+        fake.assert_called_once_with(tmp_path / "song.mp3")
+        instance.add.assert_called_once()
+        assert instance.add.call_args[0][0].rating == round(4.5 * 51)
+        instance.save.assert_called_once()
+
+    def test_flac_writes_rating_tags(self, tmp_path, mocker) -> None:
+        tags: dict = {}
+        instance = mocker.MagicMock()
+        instance.__setitem__.side_effect = tags.__setitem__
+        mocker.patch("gestor_listas.audio.FLAC", return_value=instance)
+
+        assert write_rating(tmp_path / "song.flac", 4) is True
+        assert tags["RATING"] == "4"
+        assert tags["POPULARIMETER"] == "80"
+        instance.save.assert_called_once()
+
+    def test_opus_writes_rating_tags(self, tmp_path, mocker) -> None:
+        tags: dict = {}
+        instance = mocker.MagicMock()
+        instance.__setitem__.side_effect = tags.__setitem__
+        mocker.patch("gestor_listas.audio.OggOpus", return_value=instance)
+
+        assert write_rating(tmp_path / "song.opus", 5) is True
+        assert tags["RATING"] == "5"
+
+    def test_unsupported_format_returns_false(self, tmp_path) -> None:
+        assert write_rating(tmp_path / "song.wav", 4) is False
+
+    def test_failure_returns_false(self, tmp_path, mocker) -> None:
+        mocker.patch("gestor_listas.audio.ID3", side_effect=Exception("corrupto"))
+        assert write_rating(tmp_path / "song.mp3", 4) is False
 
 
 class TestDetectBpm:

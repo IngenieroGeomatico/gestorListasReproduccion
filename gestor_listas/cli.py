@@ -4,6 +4,7 @@ import argparse
 
 from .bpm_analyzer import run_analysis
 from .downloaders import DownloadManager
+from .renamer import run_rename
 from .storage import Storage
 from .sync import run as sync_run
 
@@ -59,6 +60,17 @@ def cmd_bpm(args: argparse.Namespace) -> None:
     run_analysis(args.path, recursive=args.recursive, force=args.force, extensions=args.extensions)
 
 
+def cmd_rename(args: argparse.Namespace) -> None:
+    run_rename(
+        args.paths,
+        recursive=args.recursive,
+        apply=args.apply,
+        api_key=args.api_key or None,
+        min_score=args.min_score,
+        include_year=args.year,
+    )
+
+
 def app() -> None:
     parser = argparse.ArgumentParser(
         prog="gestor-listas",
@@ -97,6 +109,17 @@ def app() -> None:
     p_bpm.add_argument("-f", "--force", action="store_true", help="Re-analizar aunque ya tenga BPM")
     p_bpm.add_argument("-e", "--extensions", default="", help="Extensiones separadas por coma (ej: mp3,flac)")
     p_bpm.set_defaults(func=cmd_bpm)
+
+    # rename
+    p_rename = sub.add_parser("rename", help="Renombrar canciones por huella acústica (AcoustID + MusicBrainz)")
+    p_rename.add_argument("paths", nargs="+", help="Archivos o carpetas de audio a procesar")
+    p_rename.add_argument("-r", "--recursive", action="store_true", help="Procesar carpetas recursivamente")
+    p_rename.add_argument("--apply", action="store_true", help="Renombrar de verdad (sin esto solo previsualiza)")
+    p_rename.add_argument("--key", dest="api_key", default="", help="Clave API de AcoustID (o variable ACOUSTID_API_KEY)")
+    p_rename.add_argument("--min-score", type=float, default=0.5,
+                          help="Puntuación mínima de coincidencia (0-1, por defecto 0.5)")
+    p_rename.add_argument("--year", action="store_true", help="Incluir el año: 'Artista - Título (Año)'")
+    p_rename.set_defaults(func=cmd_rename)
 
     # Parse and dispatch
     args = parser.parse_args()

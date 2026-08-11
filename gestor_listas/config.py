@@ -72,6 +72,11 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return value if value else default
 
 
+def acoustid_api_key() -> Optional[str]:
+    """Clave API de AcoustID para identificar canciones por huella acústica."""
+    return _env("ACOUSTID_API_KEY")
+
+
 @dataclass(frozen=True)
 class SpotifyConfig:
     client_id: str = ""
