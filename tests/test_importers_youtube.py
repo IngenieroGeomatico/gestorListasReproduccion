@@ -111,6 +111,63 @@ class TestQuotaAndErrors:
             importer.create_playlist("x")
 
 
+class TestPlaylistReads:
+    def test_get_playlist_video_ids_paginates(self, importer, mocker) -> None:
+        importer._session.get = MagicMock(side_effect=[
+            _resp(mocker, payload={
+                "items": [
+                    {"contentDetails": {"videoId": "v1"}},
+                    {"contentDetails": {"videoId": "v2"}},
+                    {"contentDetails": {}},
+                ],
+                "nextPageToken": "PAGE2",
+            }),
+            _resp(mocker, payload={"items": [{"contentDetails": {"videoId": "v3"}}]}),
+        ])
+        vids = importer.get_playlist_video_ids("PL123")
+        assert vids == {"v1", "v2", "v3"}
+        assert importer._session.get.call_count == 2
+
+    def test_find_playlist_by_name_single_match(self, importer, mocker) -> None:
+        importer._session.get = MagicMock(return_value=_resp(mocker, payload={
+            "items": [
+                {"id": "PLotra", "snippet": {"title": "Otra"}},
+                {"id": "PLtop", "snippet": {"title": "TOP_EDM"}},
+            ]
+        }))
+        assert importer.find_playlist_by_name("TOP_EDM") == "PLtop"
+
+    def test_find_playlist_by_name_ambiguous_returns_none(self, importer, mocker) -> None:
+        importer._session.get = MagicMock(return_value=_resp(mocker, payload={
+            "items": [
+                {"id": "PL1", "snippet": {"title": "TOP_EDM"}},
+                {"id": "PL2", "snippet": {"title": "TOP_EDM"}},
+            ]
+        }))
+        assert importer.find_playlist_by_name("TOP_EDM") is None
+
+    def test_find_playlist_by_name_no_match(self, importer, mocker) -> None:
+        importer._session.get = MagicMock(return_value=_resp(mocker, payload={"items": []}))
+        assert importer.find_playlist_by_name("Nope") is None
+
+    def test_get_my_playlists(self, importer, mocker) -> None:
+        importer._session.get = MagicMock(return_value=_resp(mocker, payload={
+            "items": [
+                {"id": "PL1", "snippet": {"title": "Una", "description": "d"},
+                 "status": {"privacyStatus": "private"}},
+                {"id": "PL2", "snippet": {"title": "Dos"},
+                 "status": {"privacyStatus": "public"}},
+            ]
+        }))
+        pls = importer.get_my_playlists()
+        assert [p.id for p in pls] == ["PL1", "PL2"]
+        assert pls[0].name == "Una"
+        assert pls[0].public is False
+        assert pls[1].public is True
+        assert pls[1].source == "youtube"
+        assert "PL2" in pls[1].source_url
+
+
 class TestImportPlaylist:
     def test_import_uses_existing_video_ids_and_search(self, importer, mocker) -> None:
         created = Playlist(id="PLnew", name="Nueva", source="youtube")

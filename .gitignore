@@ -21,6 +21,7 @@ venv/
 # data & downloads
 data/gestor.db
 data/*.sqlite
+data/youtube_import_state.json
 downloads/
 .cache/
 *.db

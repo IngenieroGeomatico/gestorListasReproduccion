@@ -172,6 +172,95 @@ class YouTubeImporter:
             return None
         return items[0]["id"]["videoId"]
 
+    def get_playlist_video_ids(self, playlist_id: str, retries: int = 3, delay: float = 3.0) -> set[str]:
+        """Devuelve los videoIds ya presentes en una playlist de YouTube.
+
+        Útil para sincronizar: en lugar de volver a añadir temas ya cargados,
+        se comparan con este conjunto y solo se insertan los que falten.
+        Cada página (50 items) cuesta 1 unidad de cuota.
+
+        Reintenta unos segundos si la playlist acaba de crearse y la API aún no
+        la ha propagado (eventual consistency → playlistNotFound transitorio).
+        """
+        video_ids: set[str] = set()
+        page_token: Optional[str] = None
+        while True:
+            params = {"part": "contentDetails", "playlistId": playlist_id, "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            while True:
+                try:
+                    data = self._get("/playlistItems", params)
+                    break
+                except ProviderError as exc:
+                    if "playlistNotFound" not in str(exc) or retries <= 0:
+                        raise
+                    time.sleep(delay)
+                    retries -= 1
+            for item in data.get("items", []):
+                vid = item.get("contentDetails", {}).get("videoId")
+                if vid:
+                    video_ids.add(vid)
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return video_ids
+
+    def find_playlist_by_name(self, name: str) -> Optional[str]:
+        """Busca en la cuenta el ID de una playlist por su título exacto.
+
+        Si hay más de una coincidencia devuelve None (ambiguo): mejor crear una
+        nueva que arriesgarse a rellenar la playlist equivocada.
+        """
+        target = name.strip().lower()
+        found: Optional[str] = None
+        page_token: Optional[str] = None
+        while True:
+            params = {"part": "snippet", "mine": "true", "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._get("/playlists", params)
+            for item in data.get("items", []):
+                title = item.get("snippet", {}).get("title", "")
+                if title.strip().lower() == target:
+                    if found is not None:
+                        return None
+                    found = item["id"]
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return found
+
+    def get_my_playlists(self) -> list[Playlist]:
+        """Devuelve las playlists del usuario autenticado (id, nombre, descripción).
+
+        Solo lectura: usa `/playlists?mine=true` (1 unidad por página). Los
+        Playlist devueltos NO incluyen tracks (habría que listarlos aparte con
+        `get_playlist_video_ids` o importarlos con yt-dlp).
+        """
+        playlists: list[Playlist] = []
+        page_token: Optional[str] = None
+        while True:
+            params = {"part": "snippet,status", "mine": "true", "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._get("/playlists", params)
+            for item in data.get("items", []):
+                snippet = item.get("snippet", {})
+                status = item.get("status", {})
+                playlists.append(Playlist(
+                    id=item["id"],
+                    name=snippet.get("title", ""),
+                    description=snippet.get("description"),
+                    public=status.get("privacyStatus") == "public",
+                    source="youtube",
+                    source_url=f"https://www.youtube.com/playlist?list={item['id']}",
+                ))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return playlists
+
     @staticmethod
     def _video_id_from_track(track: Track) -> Optional[str]:
         if track.uri and "youtube.com/watch?v=" in track.uri:
