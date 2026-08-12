@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import urllib.parse
 import webbrowser
 from typing import Optional
@@ -31,18 +32,62 @@ class DeezerProvider(Provider):
     ) -> None:
         cfg = DeezerConfig.from_env()
         self._arl = arl or cfg.arl
-        token = access_token or cfg.access_token
+        self._token = access_token or cfg.access_token
+        self._email = cfg.email
+        self._password = cfg.password
 
-        if not self._arl and not token and cfg.email and cfg.password:
-            self._arl = self.login(cfg.email, cfg.password)
+        # Protege el refresco de _api_token frente a accesos concurrentes cuando
+        # el provider se comparte entre hilos (DownloadManager con max_workers>1).
+        self._token_lock = threading.Lock()
 
-        if self._arl:
+        # Estado perezoso: NO hacemos red en el constructor. La sesión ARL, el
+        # login por email/password y el cliente deezer-python se crean en el
+        # primer uso real (get_playlists/get_playlist/search_track/_gw).
+        self._api_token: Optional[str] = None
+        self._session: Optional[requests.Session] = None
+        self.client = None
+        self._connected = False
+
+    def _get_token_lock(self) -> threading.Lock:
+        """Lock de refresco de token, creado perezosamente.
+
+        Los tests instancian el provider con __new__ (sin __init__), así que el
+        atributo puede no existir: lo creamos bajo demanda de forma segura.
+        """
+        lock = getattr(self, "_token_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._token_lock = lock
+        return lock
+
+    def _ensure_connected(self) -> None:
+        """Inicializa la sesión/cliente en el primer uso (lazy connect).
+
+        Mantener la red fuera de __init__ hace el constructor rápido y sin
+        efectos secundarios (más fácil de testear y de instanciar sin fallar).
+        """
+        if getattr(self, "_connected", False):
+            return
+        # Si la sesión o el cliente ya están inyectados (p. ej. en tests que
+        # construyen con __new__), no reconectamos: respetamos ese estado.
+        if getattr(self, "_session", None) is not None or getattr(self, "client", None) is not None:
+            self._connected = True
+            return
+
+        arl = self._arl
+        if not arl and not self._token and self._email and self._password:
+            arl = self.login(self._email, self._password)
+            self._arl = arl
+
+        if arl:
             self._session = self._build_arl_session()
-            self._api_token: Optional[str] = None
             self.client = None
         else:
-            self.client = deezer.Client(access_token=token) if token else deezer.Client()
+            self.client = (
+                deezer.Client(access_token=self._token) if self._token else deezer.Client()
+            )
             self._session = None
+        self._connected = True
 
     # ── ARL (web API) internals ──────────────────────────────────
 
@@ -61,9 +106,23 @@ class DeezerProvider(Provider):
         self._api_token = data["results"].get("checkForm", "")
         return session
 
-    def _gw(self, method: str, args: object = None) -> dict:
-        if not self._api_token and method != "deezer.getUserData":
+    def _refresh_token_locked(self, stale_token: Optional[str]) -> str:
+        """Refresca _api_token bajo lock con double-checked locking.
+
+        Si otro hilo ya lo refrescó mientras esperábamos el lock (el token
+        actual difiere del 'stale' que vimos), reutilizamos el nuevo en vez de
+        volver a pedirlo. Evita refrescos redundantes y condiciones de carrera.
+        """
+        with self._get_token_lock():
+            if self._api_token and self._api_token != stale_token:
+                return self._api_token
             self._api_token = self._refresh_api_token()
+            return self._api_token
+
+    def _gw(self, method: str, args: object = None) -> dict:
+        self._ensure_connected()
+        if not self._api_token and method != "deezer.getUserData":
+            self._refresh_token_locked(None)
         params = {
             "api_version": "1.0",
             "api_token": "null" if method == "deezer.getUserData" else self._api_token,
@@ -76,10 +135,10 @@ class DeezerProvider(Provider):
         err = result.get("error")
         if err:
             # Un token de API caducado se manifiesta como VALID_TOKEN_REQUIRED o
-            # GATEWAY_ERROR: refrescamos el token y reintentamos una vez.
+            # GATEWAY_ERROR: refrescamos el token (bajo lock) y reintentamos.
             err_keys = set(err) if isinstance(err, dict) else set()
             if err_keys & {"VALID_TOKEN_REQUIRED", "GATEWAY_ERROR"}:
-                self._api_token = self._refresh_api_token()
+                self._refresh_token_locked(params["api_token"])
                 return self._gw(method, args)
             raise ProviderError(f"Deezer API error: {err}")
         if method == "deezer.getUserData":
@@ -130,6 +189,7 @@ class DeezerProvider(Provider):
     # ── Public interface ─────────────────────────────────────────
 
     def get_playlists(self) -> list[Playlist]:
+        self._ensure_connected()
         if self.client:
             playlists: list[Playlist] = []
             for dz_playlist in self.client.get_user_playlists():
@@ -141,6 +201,7 @@ class DeezerProvider(Provider):
         return [self._arl_playlist(item) for item in result.get("TAB", {}).get("playlists", {}).get("data", [])]
 
     def get_playlist(self, playlist_id: str, load_tracks: bool = True) -> Playlist:
+        self._ensure_connected()
         if self.client:
             dz_playlist = self.client.get_playlist(int(playlist_id))
             return self._to_model(dz_playlist, load_tracks=True)
@@ -162,6 +223,7 @@ class DeezerProvider(Provider):
         )
 
     def search_track(self, title: str, artist: str) -> Optional[Track]:
+        self._ensure_connected()
         if self.client:
             query = f"{artist} {title}"
             results = self.client.search(query)

@@ -112,20 +112,21 @@ class TestDeezerStreamUrl:
             {"TRACK_TOKEN": "tok"},  # song.getData
             {"USER": {"OPTIONS": {"license_token": "lic"}}},  # deezer.getUserData
         ]
-        dl = DeezerDownloader(provider=provider)
+        session = MagicMock()
+        dl = DeezerDownloader(provider=provider, session=session)
 
         resp = mocker.Mock(status_code=200)
         resp.json.return_value = {
             "data": [{"media": [{"sources": [{"url": "https://media/stream"}]}]}]
         }
-        mocker.patch("gestor_listas.downloaders.deezer._session.post", return_value=resp)
+        session.post.return_value = resp
 
         assert dl._get_stream_url("123") == "https://media/stream"
 
     def test_get_stream_url_no_track_token(self) -> None:
         provider = MagicMock()
         provider._gw.return_value = {}  # sin TRACK_TOKEN
-        dl = DeezerDownloader(provider=provider)
+        dl = DeezerDownloader(provider=provider, session=MagicMock())
         assert dl._get_stream_url("123") is None
 
     def test_get_stream_url_http_error(self, mocker) -> None:
@@ -134,15 +135,16 @@ class TestDeezerStreamUrl:
             {"TRACK_TOKEN": "tok"},
             {"USER": {"OPTIONS": {"license_token": "lic"}}},
         ]
-        dl = DeezerDownloader(provider=provider)
+        session = MagicMock()
+        dl = DeezerDownloader(provider=provider, session=session)
         resp = mocker.Mock(status_code=403)
-        mocker.patch("gestor_listas.downloaders.deezer._session.post", return_value=resp)
+        session.post.return_value = resp
         assert dl._get_stream_url("123") is None
 
     def test_get_stream_url_gw_exception(self) -> None:
         provider = MagicMock()
         provider._gw.side_effect = RuntimeError("gw caido")
-        dl = DeezerDownloader(provider=provider)
+        dl = DeezerDownloader(provider=provider, session=MagicMock())
         assert dl._get_stream_url("123") is None
 
 
@@ -163,14 +165,12 @@ class TestDeezerTagFile:
                 "ALB_PICTURE": "hash",
             },
         ]
-        dl = DeezerDownloader(provider=provider)
+        session = MagicMock()
+        session.get.return_value = mocker.Mock(content=b"coverbytes")
+        dl = DeezerDownloader(provider=provider, session=session)
 
         write_tags = mocker.patch("gestor_listas.audio.write_id3_tags")
         mocker.patch("gestor_listas.audio.detect_bpm", return_value=128.0)
-        mocker.patch(
-            "gestor_listas.downloaders.deezer._session.get",
-            return_value=mocker.Mock(content=b"coverbytes"),
-        )
 
         mp3 = tmp_path / "song.mp3"
         mp3.write_bytes(b"x")

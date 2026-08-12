@@ -15,7 +15,7 @@ class TestSpotifyImporter:
         mock_provider.get_playlist.return_value = Playlist(
             id="new_pl", name="Imported", tracks=[], source="spotify"
         )
-        mock_provider.client.playlist_add_items.return_value = None
+        mock_provider.add_tracks_to_playlist.return_value = None
 
         importer = SpotifyImporter(mock_provider)
 
@@ -28,7 +28,7 @@ class TestSpotifyImporter:
         mock_provider.create_playlist.assert_called_once_with(
             name="Source", description="", public=False
         )
-        mock_provider.client.playlist_add_items.assert_called_once_with(
+        mock_provider.add_tracks_to_playlist.assert_called_once_with(
             "new_pl", ["spotify:track:t1", "spotify:track:t2"]
         )
 
@@ -46,7 +46,7 @@ class TestSpotifyImporter:
             )
 
         mock_provider.search_track.side_effect = search_side_effect
-        mock_provider.client.playlist_add_items.return_value = None
+        mock_provider.add_tracks_to_playlist.return_value = None
 
         importer = SpotifyImporter(mock_provider)
 
@@ -57,7 +57,7 @@ class TestSpotifyImporter:
 
         mock_provider.create_playlist.assert_called_once()
         mock_provider.search_track.assert_called_once_with("Song 1", "Artist 1")
-        mock_provider.client.playlist_add_items.assert_called_once_with(
+        mock_provider.add_tracks_to_playlist.assert_called_once_with(
             "new_pl", ["spotify:track:found_song_1"]
         )
 
@@ -65,7 +65,7 @@ class TestSpotifyImporter:
         mock_provider = MagicMock()
         mock_provider.create_playlist.return_value = Playlist(id="new_pl", name="Imported", source="spotify")
         mock_provider.get_playlist.return_value = Playlist(id="new_pl", name="Imported", source="spotify")
-        mock_provider.client.playlist_add_items.return_value = None
+        mock_provider.add_tracks_to_playlist.return_value = None
 
         importer = SpotifyImporter(mock_provider)
 
@@ -77,8 +77,8 @@ class TestSpotifyImporter:
 
         result = importer.import_playlist(src)
 
-        assert mock_provider.client.playlist_add_items.call_count == 2
-        mock_provider.client.playlist_add_items.assert_has_calls([
+        assert mock_provider.add_tracks_to_playlist.call_count == 2
+        mock_provider.add_tracks_to_playlist.assert_has_calls([
             call("new_pl", [f"spotify:track:t{i}" for i in range(100)]),
             call("new_pl", [f"spotify:track:t{i}" for i in range(100, 150)]),
         ])

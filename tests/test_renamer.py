@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import acoustid
 import pytest
@@ -334,38 +335,49 @@ class TestEnsureFfmpegOnPath:
         assert os.environ["PATH"] == before
 
     def test_bundled_ffmpeg_added_to_path(self, mocker) -> None:
+        # Binario ya llamado como el comando esperado (ffmpeg / ffmpeg.exe según
+        # el SO): basta con añadir su carpeta al PATH, sin copiar ni enlazar.
+        command_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        exe = Path("/x/y/ffmpeg-bundled") / command_name
         mocker.patch("gestor_listas.renamer.shutil.which", return_value=None)
-        mocker.patch(
-            "gestor_listas.renamer.resolve_ffmpeg",
-            return_value="/x/y/ffmpeg-linux-x86_64-v6.0/ffmpeg",
-        )
+        mocker.patch("gestor_listas.renamer.resolve_ffmpeg", return_value=str(exe))
         mocker.patch.dict("os.environ", {"PATH": "/usr/bin"})
         _ensure_ffmpeg_on_path()
-        assert "/x/y/ffmpeg-linux-x86_64-v6.0" in os.environ["PATH"].split(os.pathsep)
+        assert str(exe.parent) in os.environ["PATH"].split(os.pathsep)
         assert os.environ["PATH"].endswith(os.pathsep + "/usr/bin")
 
-    def test_versioned_binary_creates_symlink(self, mocker, tmp_path) -> None:
+    def test_versioned_binary_is_exposed(self, mocker, tmp_path) -> None:
+        # Binario con nombre versionado: se expone como 'ffmpeg'(.exe) en el
+        # bindir de caché. En Unix mediante symlink; en Windows copiando (los
+        # symlinks requieren privilegios de administrador).
+        command_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        src = tmp_path / f"ffmpeg-bundled-v7.0.2{'.exe' if os.name == 'nt' else ''}"
+        src.write_bytes(b"fake-ffmpeg-binary")
         mocker.patch("gestor_listas.renamer.shutil.which", return_value=None)
-        mocker.patch(
-            "gestor_listas.renamer.resolve_ffmpeg",
-            return_value="/x/y/ffmpeg-linux-x86_64-v7.0.2",
-        )
+        mocker.patch("gestor_listas.renamer.resolve_ffmpeg", return_value=str(src))
         mocker.patch("gestor_listas.renamer.Path.home", return_value=tmp_path)
         mocker.patch.dict("os.environ", {"PATH": "/usr/bin"})
         _ensure_ffmpeg_on_path()
-        link = tmp_path / ".cache" / "gestor-listas" / "bin" / "ffmpeg"
-        assert link.is_symlink()
-        assert os.readlink(link) == "/x/y/ffmpeg-linux-x86_64-v7.0.2"
-        assert str(link.parent) in os.environ["PATH"].split(os.pathsep)
+        exposed = tmp_path / ".cache" / "gestor-listas" / "bin" / command_name
+        assert exposed.exists()
+        if os.name == "nt":
+            assert exposed.read_bytes() == b"fake-ffmpeg-binary"
+        else:
+            assert exposed.is_symlink()
+            assert os.readlink(exposed) == str(src)
+        assert str(exposed.parent) in os.environ["PATH"].split(os.pathsep)
 
-    def test_symlink_failure_keeps_path(self, mocker, tmp_path) -> None:
+    def test_expose_failure_keeps_path(self, mocker, tmp_path) -> None:
+        src = tmp_path / f"ffmpeg-bundled-v7.0.2{'.exe' if os.name == 'nt' else ''}"
+        src.write_bytes(b"fake")
         mocker.patch("gestor_listas.renamer.shutil.which", return_value=None)
-        mocker.patch(
-            "gestor_listas.renamer.resolve_ffmpeg",
-            return_value="/x/y/ffmpeg-linux-x86_64-v7.0.2",
-        )
+        mocker.patch("gestor_listas.renamer.resolve_ffmpeg", return_value=str(src))
         mocker.patch("gestor_listas.renamer.Path.home", return_value=tmp_path)
-        mocker.patch("gestor_listas.renamer.Path.symlink_to", side_effect=OSError("permiso denegado"))
+        # Falla el mecanismo de exposición según el SO.
+        if os.name == "nt":
+            mocker.patch("gestor_listas.renamer.shutil.copy2", side_effect=OSError("denegado"))
+        else:
+            mocker.patch("gestor_listas.renamer.Path.symlink_to", side_effect=OSError("denegado"))
         before = "PATH_VALUE"
         mocker.patch.dict("os.environ", {"PATH": before})
         _ensure_ffmpeg_on_path()

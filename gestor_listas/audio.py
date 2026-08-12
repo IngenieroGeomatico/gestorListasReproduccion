@@ -16,8 +16,6 @@ from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, POP
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
-logger = logging.getLogger(__name__)
-
 from .config import resolve_ffmpeg
 
 logger = logging.getLogger(__name__)

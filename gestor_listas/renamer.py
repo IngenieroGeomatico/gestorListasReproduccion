@@ -79,9 +79,14 @@ def _ensure_ffmpeg_on_path() -> None:
 
     Prefiere el ffmpeg del sistema si ya está en el PATH. Si no, usa el binario
     empaquetado por `imageio-ffmpeg` (misma resolución que config.resolve_ffmpeg):
-    como ese binario tiene nombre con versión (p. ej. ffmpeg-linux-x86_64-v7.0.2)
-    y audioread solo busca el comando literal 'ffmpeg', se crea un symlink con ese
-    nombre en ~/.cache/gestor-listas/bin y se añade ese directorio al PATH.
+    como ese binario tiene nombre con versión (p. ej. ffmpeg-linux-x86_64-v7.0.2,
+    o ...-win-....exe en Windows) y audioread solo busca el comando literal
+    'ffmpeg'/'ffmpeg.exe', se expone con ese nombre en ~/.cache/gestor-listas/bin
+    y se añade ese directorio al PATH.
+
+    Cross-platform: en Windows el ejecutable es 'ffmpeg.exe' y los symlinks
+    requieren privilegios de administrador, así que se copia el binario en vez de
+    enlazarlo; en Unix se usa un symlink (barato).
     """
     if shutil.which("ffmpeg"):
         return
@@ -90,15 +95,24 @@ def _ensure_ffmpeg_on_path() -> None:
     except Exception:
         return
 
-    if exe.name == "ffmpeg":
+    # Nombre de comando que audioread buscará en el PATH según el SO.
+    command_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+
+    # Si el binario resuelto ya se llama como el comando esperado, basta con
+    # añadir su carpeta al PATH.
+    if exe.name.lower() == command_name.lower():
         parent = str(exe.parent)
     else:
         bindir = Path.home() / ".cache" / "gestor-listas" / "bin"
         bindir.mkdir(parents=True, exist_ok=True)
-        link = bindir / "ffmpeg"
-        if not link.exists():
+        target = bindir / command_name
+        if not target.exists():
             try:
-                link.symlink_to(exe)
+                if os.name == "nt":
+                    # symlink poco fiable en Windows: copiamos el binario.
+                    shutil.copy2(exe, target)
+                else:
+                    target.symlink_to(exe)
             except OSError:
                 return
         parent = str(bindir)

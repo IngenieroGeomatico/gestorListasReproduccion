@@ -33,9 +33,14 @@ class SpotifyImporter:
                     track_uris.append(found.uri)
 
         if track_uris:
+            # La API de Spotify acepta como máximo 100 URIs por petición.
+            # Usamos el método público del provider (add_tracks_to_playlist →
+            # _api_post), que funciona en modo bearer token; antes se usaba
+            # self.provider.client (spotipy OAuth), que lanza RuntimeError si el
+            # provider está en modo bearer/scraping (el caso más común).
             batch_size = 100
             for i in range(0, len(track_uris), batch_size):
                 batch = track_uris[i : i + batch_size]
-                self.provider.client.playlist_add_items(created.id, batch)
+                self.provider.add_tracks_to_playlist(created.id, batch)
 
         return self.provider.get_playlist(created.id)

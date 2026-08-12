@@ -40,23 +40,30 @@ class DownloadManager:
 
     def download_track(self, track: Track, output_dir: Optional[Path] = None) -> DownloadResult:
         dest = output_dir or self.output_dir
-        sources = []
         if self.prefer == "deezer":
             sources = [("deezer", self._deezer), ("youtube", self._youtube)]
         else:
             sources = [("youtube", self._youtube), ("deezer", self._deezer)]
 
+        # Guardamos el detalle de cada fallo para poder diagnosticar por qué no
+        # se descargó: sin esto (un bare 'except: continue') se perdía la causa.
+        errors: list[str] = []
         for name, downloader in sources:
             try:
                 path = downloader.download(track, dest)
                 if path:
                     return DownloadResult(track=track, path=path, source=name)
-            except Exception:
-                continue
+                errors.append(f"{name}: sin resultado")
+            except Exception as exc:  # noqa: BLE001 - probamos la siguiente fuente
+                logger.warning(
+                    "Fallo al descargar '%s - %s' desde %s: %s",
+                    track.artist, track.title, name, exc,
+                )
+                errors.append(f"{name}: {exc}")
 
         return DownloadResult(
             track=track,
-            error="No se pudo descargar de ninguna fuente",
+            error="No se pudo descargar de ninguna fuente (" + "; ".join(errors) + ")",
         )
 
     def download_playlist(

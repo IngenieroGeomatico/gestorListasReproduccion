@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import requests
+
 from ..http import make_session
 from ..model import Track
 from ..providers.deezer import DeezerProvider
@@ -13,9 +15,6 @@ logger = logging.getLogger(__name__)
 
 BLOWFISH_SECRET = b"g4el58wc0zvf9na1"
 CHUNK_SIZE = 2048
-
-# Sesión con reintentos compartida para descargas y carátulas.
-_session = make_session()
 
 
 def _blowfish_key(track_id: str) -> bytes:
@@ -75,8 +74,16 @@ COVER_BASE = "https://cdn-images.dzcdn.net/images/cover"
 
 
 class DeezerDownloader:
-    def __init__(self, provider: Optional[DeezerProvider] = None) -> None:
+    def __init__(
+        self,
+        provider: Optional[DeezerProvider] = None,
+        session: Optional[requests.Session] = None,
+    ) -> None:
         self._provider = provider or DeezerProvider()
+        # Sesión propia de la instancia (thread-safe): requests.Session no es
+        # seguro entre hilos, así que cada DeezerDownloader usa la suya. Por
+        # defecto se crea una nueva con reintentos; puede inyectarse en tests.
+        self._session = session or make_session()
 
     def download(self, track: Track, output_dir: str | Path) -> Optional[Path]:
         output_dir = Path(output_dir)
@@ -92,15 +99,22 @@ class DeezerDownloader:
         if not deezer_id:
             return None
 
-        stream_url = self._get_stream_url(deezer_id)
+        # Una sola llamada a song.getData: la reutilizan _get_stream_url y
+        # _tag_file (antes se pedía dos veces, duplicando la red por pista).
+        try:
+            song = self._provider._gw("song.getData", {"sng_id": int(deezer_id)})
+        except Exception:
+            return None
+
+        stream_url = self._get_stream_url(deezer_id, song)
         if not stream_url:
             return None
 
-        resp = _session.get(stream_url, stream=True, timeout=120)
+        resp = self._session.get(stream_url, stream=True, timeout=120)
         resp.raise_for_status()
         _decrypt_stream_to_file(resp, deezer_id, output_path)
 
-        self._tag_file(output_path, deezer_id)
+        self._tag_file(output_path, deezer_id, song)
 
         return output_path
 
@@ -112,13 +126,14 @@ class DeezerDownloader:
             return found.id
         return None
 
-    def _get_stream_url(self, track_id: str) -> Optional[str]:
-        try:
-            data = self._provider._gw("song.getData", {"sng_id": int(track_id)})
-        except Exception:
-            return None
+    def _get_stream_url(self, track_id: str, song: Optional[dict] = None) -> Optional[str]:
+        if song is None:
+            try:
+                song = self._provider._gw("song.getData", {"sng_id": int(track_id)})
+            except Exception:
+                return None
 
-        track_token = data.get("TRACK_TOKEN")
+        track_token = song.get("TRACK_TOKEN")
         if not track_token:
             return None
 
@@ -131,7 +146,7 @@ class DeezerDownloader:
             "track_tokens": [track_token],
         }
 
-        resp = _session.post("https://media.deezer.com/v1/get_url", json=payload, timeout=30)
+        resp = self._session.post("https://media.deezer.com/v1/get_url", json=payload, timeout=30)
         if resp.status_code != 200:
             return None
 
@@ -140,12 +155,15 @@ class DeezerDownloader:
         except (KeyError, IndexError):
             return None
 
-    def _tag_file(self, mp3_path: Path, track_id: str) -> None:
+    def _tag_file(self, mp3_path: Path, track_id: str, song: Optional[dict] = None) -> None:
         from ..audio import write_id3_tags, detect_bpm
 
-        try:
-            song = self._provider._gw("song.getData", {"sng_id": int(track_id)})
-        except Exception:
+        if song is None:
+            try:
+                song = self._provider._gw("song.getData", {"sng_id": int(track_id)})
+            except Exception:
+                return
+        elif not song:
             return
 
         title = song.get("SNG_TITLE")
@@ -171,7 +189,7 @@ class DeezerDownloader:
                 if cover_hash:
                     cover_url = f"{COVER_BASE}/{cover_hash}/500x500-000000-80-0-0.jpg"
                     try:
-                        cover_data = _session.get(cover_url, timeout=15).content
+                        cover_data = self._session.get(cover_url, timeout=15).content
                     except Exception:
                         pass
             except Exception:
