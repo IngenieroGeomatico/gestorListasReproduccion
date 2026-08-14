@@ -68,6 +68,7 @@ def cmd_rename(args: argparse.Namespace) -> None:
         api_key=args.api_key or None,
         min_score=args.min_score,
         include_year=args.year,
+        dest=args.dest or None,
     )
 
 
@@ -119,6 +120,8 @@ def app() -> None:
     p_rename.add_argument("--min-score", type=float, default=0.5,
                           help="Puntuación mínima de coincidencia (0-1, por defecto 0.5)")
     p_rename.add_argument("--year", action="store_true", help="Incluir el año: 'Artista - Título (Año)'")
+    p_rename.add_argument("--dest", dest="dest", default="",
+                          help="Modo biblioteca: mover a DEST/<Género>/Artista - Título.ext (borra el origen)")
     p_rename.set_defaults(func=cmd_rename)
 
     # Parse and dispatch

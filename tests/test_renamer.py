@@ -12,6 +12,8 @@ from gestor_listas.renamer import (
     _parse_acoustid_result,
     _process_file,
     build_filename,
+    clean_filename_bits,
+    detect_genre,
     enrich_from_musicbrainz,
     fingerprint_file,
     identify_track,
@@ -21,6 +23,9 @@ from gestor_listas.renamer import (
     resolve_target,
     run_rename,
     sanitize_component,
+    search_recording,
+    track_from_filename,
+    track_from_partial_tags,
     track_from_tags,
 )
 
@@ -264,6 +269,166 @@ class TestTrackFromTags:
         assert track_from_tags(tmp_path / "song.mp3") is None
 
 
+class TestTrackFromPartialTags:
+    def test_artist_plus_filename_title(self, tmp_path, mocker) -> None:
+        mocker.patch(
+            "gestor_listas.renamer.MutagenFile",
+            return_value={"artist": ["Dj Valera"]},
+        )
+        track = track_from_partial_tags(tmp_path / "A2-DJ.mp3")
+        assert track is not None
+        assert track.title == "A2-DJ"
+        assert track.artist == "Dj Valera"
+        assert track.source == "partial-tags"
+
+    def test_cleans_filename_underscores(self, tmp_path, mocker) -> None:
+        mocker.patch(
+            "gestor_listas.renamer.MutagenFile",
+            return_value={"artist": ["Sofia DJ feat Lucy"]},
+        )
+        track = track_from_partial_tags(tmp_path / "wenakom_x2.mp3")
+        assert track is not None
+        assert track.title == "wenakom x2"
+
+    def test_strips_surrounding_spaces(self, tmp_path, mocker) -> None:
+        mocker.patch(
+            "gestor_listas.renamer.MutagenFile",
+            return_value={"artist": ["urta navarro"]},
+        )
+        track = track_from_partial_tags(tmp_path / " pokytazo .mp3")
+        assert track is not None
+        assert track.title == "pokytazo"
+
+    def test_strips_trailing_separator_from_artist(self, tmp_path, mocker) -> None:
+        mocker.patch(
+            "gestor_listas.renamer.MutagenFile",
+            return_value={"artist": ["urta navarro presents alvaro grilly -"]},
+        )
+        track = track_from_partial_tags(tmp_path / "pokytazo.mp3")
+        assert track is not None
+        assert track.artist == "urta navarro presents alvaro grilly"
+        assert track.title == "pokytazo"
+
+    def test_no_tags_returns_none(self, tmp_path, mocker) -> None:
+        mocker.patch("gestor_listas.renamer.MutagenFile", return_value=None)
+        assert track_from_partial_tags(tmp_path / "song.mp3") is None
+
+    def test_no_artist_uses_unknown(self, tmp_path, mocker) -> None:
+        mocker.patch(
+            "gestor_listas.renamer.MutagenFile",
+            return_value={"album": ["bakala"]},
+        )
+        track = track_from_partial_tags(tmp_path / "tiririrari.mp3")
+        assert track is not None
+        assert track.artist == "Artista desconocido"
+        assert track.title == "tiririrari"
+
+
+class TestCleanFilenameBits:
+    def test_strips_web_junk(self) -> None:
+        assert clean_filename_bits("Song (720p) [mp3hamster.net]") == "Song"
+        assert clean_filename_bits("Artist - Título (1080p)") == "Artist - Título"
+
+    def test_removes_underscores(self) -> None:
+        assert clean_filename_bits("Bass_Topic - Memorias") == "Bass Topic - Memorias"
+
+
+class TestTrackFromFilename:
+    def test_parses_artist_title(self, tmp_path) -> None:
+        track = track_from_filename(tmp_path / "Mauro Picotto - Proximus.mp3")
+        assert track is not None
+        assert track.artist == "Mauro Picotto"
+        assert track.title == "Proximus"
+        assert track.source == "filename"
+
+    def test_cleans_web_junk(self, tmp_path) -> None:
+        track = track_from_filename(
+            tmp_path / "JOG - Future (Summer Mix) 1995 (480p).mp3"
+        )
+        assert track is not None
+        assert track.artist == "JOG"
+        assert track.title == "Future (Summer Mix) 1995"
+
+    def test_requires_separator(self, tmp_path) -> None:
+        assert track_from_filename(tmp_path / "No Controles.mp3") is None
+
+    def test_requires_both_parts(self, tmp_path) -> None:
+        assert track_from_filename(tmp_path / "Artist - .mp3") is None
+
+
+class TestSearchRecording:
+    def test_returns_best_result(self, mocker) -> None:
+        resp = mocker.Mock()
+        resp.json.return_value = {
+            "recordings": [
+                {
+                    "id": "rec-x",
+                    "title": "Find Me",
+                    "artist-credit": [{"name": "Some DJ"}],
+                    "score": "70",
+                }
+            ]
+        }
+        mocker.patch("gestor_listas.renamer.requests.get", return_value=resp)
+        enriched = TrackInfo(title="Find Me", artist="Some DJ", rating=3.5)
+        mocker.patch("gestor_listas.renamer.enrich_from_musicbrainz", return_value=enriched)
+        track = search_recording("Find Me")
+        assert track is enriched
+        assert track.rating == 3.5
+
+    def test_low_score_returns_none(self, mocker) -> None:
+        resp = mocker.Mock()
+        resp.json.return_value = {
+            "recordings": [
+                {
+                    "id": "rec-x",
+                    "title": "Find Me",
+                    "artist-credit": [{"name": "Some DJ"}],
+                    "score": "10",
+                }
+            ]
+        }
+        mocker.patch("gestor_listas.renamer.requests.get", return_value=resp)
+        mocker.patch("gestor_listas.renamer.enrich_from_musicbrainz")
+        assert search_recording("Find Me") is None
+
+    def test_no_results_returns_none(self, mocker) -> None:
+        resp = mocker.Mock()
+        resp.json.return_value = {"recordings": []}
+        mocker.patch("gestor_listas.renamer.requests.get", return_value=resp)
+        assert search_recording("Nope") is None
+
+
+class TestDetectGenre:
+    def test_detects_specific_styles(self) -> None:
+        assert detect_genre("poky Energy") == "Poky"
+        assert detect_genre("Hardstyle Mix") == "Hardstyle"
+        assert detect_genre("DJ X - Trance Anthem") == "Trance"
+        assert detect_genre("Techno Nation") == "Techno"
+
+    def test_specific_beats_generic(self) -> None:
+        assert detect_genre("Hardstyle Dance Track") == "Hardstyle"
+        assert detect_genre("Drum & Bass Jungle") == "Drum & Bass"
+
+    def test_no_match_returns_none(self) -> None:
+        assert detect_genre("Something completely unrelated") is None
+
+    def test_ignores_case(self) -> None:
+        assert detect_genre("MAKINA POWER") == "Makina"
+
+    def test_detects_folder_genres(self) -> None:
+        assert detect_genre("-- CANTADITAS") == "Cantaditas"
+        assert detect_genre("-- MELODIAS") == "Melodías"
+        assert detect_genre("-- PROGRESSIVE") == "Progressive"
+        assert detect_genre("-- REMEMBER") == "Remember"
+        assert detect_genre("-- DANCE") == "Dance"
+        assert detect_genre("-- TRANCE") == "Trance"
+
+    def test_unrelated_folder_returns_none(self) -> None:
+        assert detect_genre("Variado") is None
+        assert detect_genre("- Recopilatorios") is None
+
+
 class TestProcessFile:
     def test_no_fingerprint_reports_error(self, tmp_path, mocker) -> None:
         source = tmp_path / "a.mp3"
@@ -279,6 +444,9 @@ class TestProcessFile:
         mocker.patch("gestor_listas.renamer.fingerprint_file", return_value=(10.0, "fp"))
         mocker.patch("gestor_listas.renamer.identify_track", return_value=None)
         mocker.patch("gestor_listas.renamer.track_from_tags", return_value=None)
+        mocker.patch("gestor_listas.renamer.track_from_filename", return_value=None)
+        mocker.patch("gestor_listas.renamer.search_recording", return_value=None)
+        mocker.patch("gestor_listas.renamer.track_from_partial_tags", return_value=None)
         ok, renamed = _process_file(source, "KEY", 0.5, False, False)
         assert ok is False
 
@@ -323,6 +491,77 @@ class TestProcessFile:
         target = tmp_path / "Artist - Song.mp3"
         assert target.exists()
         rating.assert_called_once_with(target, 4.5)
+
+
+class TestLibraryMode:
+    def test_moves_to_genre_folder(self, tmp_path, mocker) -> None:
+        source = tmp_path / "a.mp3"
+        source.write_bytes(b"\x00" * 128)
+        mocker.patch("gestor_listas.renamer.fingerprint_file", return_value=(10.0, "fp"))
+        track = TrackInfo(title="Energy", artist="Poky DJ", score=0.9)
+        mocker.patch("gestor_listas.renamer.identify_track", return_value=track)
+        dest = tmp_path / "bakala"
+        ok, renamed = _process_file(source, "KEY", 0.5, False, apply=True, dest=dest)
+        assert ok is True
+        assert renamed is True
+        target = dest / "Poky" / "Poky DJ - Energy.mp3"
+        assert target.exists()
+        assert not source.exists()
+
+    def test_preview_does_not_move(self, tmp_path, mocker) -> None:
+        source = tmp_path / "a.mp3"
+        source.write_bytes(b"\x00" * 128)
+        mocker.patch("gestor_listas.renamer.fingerprint_file", return_value=(10.0, "fp"))
+        track = TrackInfo(title="Energy", artist="Poky DJ", score=0.9)
+        mocker.patch("gestor_listas.renamer.identify_track", return_value=track)
+        dest = tmp_path / "bakala"
+        ok, renamed = _process_file(source, "KEY", 0.5, False, apply=False, dest=dest)
+        assert ok is True
+        assert renamed is False
+        assert source.exists()
+
+    def test_moves_with_rating_and_genre(self, tmp_path, mocker) -> None:
+        source = tmp_path / "a.mp3"
+        source.write_bytes(b"\x00" * 128)
+        mocker.patch("gestor_listas.renamer.fingerprint_file", return_value=(10.0, "fp"))
+        track = TrackInfo(title="Energy", artist="Poky DJ", score=0.9, rating=4.5)
+        mocker.patch("gestor_listas.renamer.identify_track", return_value=track)
+        rating = mocker.patch("gestor_listas.renamer.write_rating", return_value=True)
+        genre = mocker.patch("gestor_listas.renamer.write_genre", return_value=True)
+        dest = tmp_path / "bakala"
+        ok, renamed = _process_file(source, "KEY", 0.5, False, apply=True, dest=dest)
+        assert ok is True
+        assert renamed is True
+        target = dest / "Poky" / "Poky DJ - Energy.mp3"
+        assert target.exists()
+        rating.assert_called_once_with(target, 4.5)
+        genre.assert_called_once_with(target, "Poky")
+
+    def test_no_genre_uses_cantaditas_by_default(self, tmp_path, mocker) -> None:
+        source = tmp_path / "a.mp3"
+        source.write_bytes(b"\x00" * 128)
+        mocker.patch("gestor_listas.renamer.fingerprint_file", return_value=(10.0, "fp"))
+        track = TrackInfo(title="Mystery", artist="Unknown", score=0.9)
+        mocker.patch("gestor_listas.renamer.identify_track", return_value=track)
+        mocker.patch("gestor_listas.renamer.detect_genre", return_value=None)
+        dest = tmp_path / "bakala"
+        ok, renamed = _process_file(source, "KEY", 0.5, False, apply=True, dest=dest)
+        assert ok is True
+        assert renamed is True
+        assert (dest / "Cantaditas" / "Unknown - Mystery.mp3").exists()
+
+    def test_instrumental_title_uses_melodias(self, tmp_path, mocker) -> None:
+        source = tmp_path / "a.mp3"
+        source.write_bytes(b"\x00" * 128)
+        mocker.patch("gestor_listas.renamer.fingerprint_file", return_value=(10.0, "fp"))
+        track = TrackInfo(title="Mystery (instrumental)", artist="Unknown", score=0.9)
+        mocker.patch("gestor_listas.renamer.identify_track", return_value=track)
+        mocker.patch("gestor_listas.renamer.detect_genre", return_value=None)
+        dest = tmp_path / "bakala"
+        ok, renamed = _process_file(source, "KEY", 0.5, False, apply=True, dest=dest)
+        assert ok is True
+        assert renamed is True
+        assert (dest / "Melodías" / "Unknown - Mystery (instrumental).mp3").exists()
 
 
 class TestEnsureFfmpegOnPath:

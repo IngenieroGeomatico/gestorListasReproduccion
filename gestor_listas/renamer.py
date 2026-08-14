@@ -22,7 +22,7 @@ import acoustid
 import requests
 from mutagen import File as MutagenFile
 
-from .audio import write_rating
+from .audio import write_genre, write_rating
 from .config import acoustid_api_key, resolve_ffmpeg
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,11 @@ REQUEST_DELAY = 1.0
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 MULTISPACE = re.compile(r"\s+")
 
+# Umbral de confianza (0-100, tal y como la devuelve MusicBrainz) para el
+# rescate por búsqueda de texto: como estos candidatos se infieren del nombre
+# del archivo, exigimos un mínimo de acierto para no renombrar a cualquier cosa.
+SEARCH_MIN_SCORE = 30
+
 
 @dataclass
 class TrackInfo:
@@ -69,6 +74,8 @@ class TrackInfo:
     recording_id: str | None = None
     rating: float | None = None
     rating_count: int | None = None
+    genre: str | None = None
+    source: str = ""
 
 
 # ───────────────────────────── Huella acústica ───────────────────────────────
@@ -202,8 +209,11 @@ def enrich_from_musicbrainz(track: TrackInfo) -> TrackInfo:
     """Completa metadatos de una grabación usando la API de MusicBrainz."""
     if not track.recording_id:
         return track
+    # MusicBrainz pide ~1 req/s: esperamos 1s antes de cada consulta para no
+    # saturar el servicio (los 503 se daban por lanzar peticiones en ráfaga).
+    time.sleep(REQUEST_DELAY)
     url = f"{MUSICBRAINZ_BASE}/recording/{track.recording_id}"
-    params = {"inc": "releases ratings", "fmt": "json"}
+    params = {"inc": "releases ratings genres", "fmt": "json"}
     try:
         resp = requests.get(url, params=params, headers=MUSICBRAINZ_HEADERS, timeout=10)
         resp.raise_for_status()
@@ -235,6 +245,11 @@ def enrich_from_musicbrainz(track: TrackInfo) -> TrackInfo:
             track.rating = float(rating["value"])
         if rating.get("count") is not None:
             track.rating_count = int(rating["count"])
+    genres = data.get("genres") or []
+    if genres:
+        names = [g.get("name") for g in genres if g.get("name")]
+        if names:
+            track.genre = names[0]
     return track
 
 
@@ -310,6 +325,36 @@ def rename_file(source: Path, track: TrackInfo, include_year: bool = False) -> P
     return target
 
 
+def resolve_library_target(
+    directory: Path, track: TrackInfo, extension: str, include_year: bool = False
+) -> Path:
+    """Calcula la ruta destino en la biblioteca evitando colisiones."""
+    candidate = build_filename(track, extension, include_year)
+    target = directory / candidate
+    counter = 1
+    stem = Path(candidate).stem
+    while target.exists():
+        candidate = f"{stem} ({counter}){extension}"
+        target = directory / candidate
+        counter += 1
+    return target
+
+
+def move_file(source: Path, target: Path) -> Path | None:
+    """Mueve el archivo a su destino. Devuelve la nueva ruta o None si falla."""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            source.rename(target)
+        except OSError:
+            shutil.move(str(source), str(target))
+    except OSError as exc:
+        log.error("No se pudo mover %s a %s: %s", source, target, exc)
+        return None
+    log.info("Movido: %s -> %s", source, target)
+    return target
+
+
 # ─────────────────────────── Orquestación ────────────────────────────────────
 
 
@@ -362,10 +407,260 @@ def track_from_tags(path: Path) -> TrackInfo | None:
     )
 
 
+def track_from_partial_tags(path: Path) -> TrackInfo | None:
+    """Rescate final: artista del tag + nombre de archivo como título.
+
+    Algunos temas bakala vienen con la etiqueta de artista rellena pero sin
+    título, y el nombre del archivo es el nombre popular por el que se conoce
+    el tema (p. ej. "wenakom.mp3", "pokytazo .mp3"). Sin rating ni genre.
+    """
+    try:
+        tags = MutagenFile(str(path), easy=True)
+    except Exception:
+        return None
+    if not tags:
+        return None
+
+    def _first(value) -> str | None:
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+        if not value:
+            return None
+        return str(value).strip() or None
+
+    artist = _first(tags.get("artist"))
+    title = clean_filename_bits(Path(path).stem)
+    if not artist and not title:
+        return None
+    if not artist:
+        artist = "Artista desconocido"
+    else:
+        # Algunos temas traen el artista con un separador colgando
+        # (p. ej. "urta navarro -"), que quedaría doble en el nombre final.
+        artist = artist.rstrip(" -–—")
+    if not title:
+        title = Path(path).stem
+    return TrackInfo(title=title, artist=artist, source="partial-tags")
+
+
+# ─────────────────── Rescate: nombre de archivo y búsqueda ───────────────────
+
+# Basura típica de descargas que hay que limpiar del nombre del archivo.
+_FILENAME_JUNK = [
+    r"\(?\d{3,4}p\)?",  # (480p) (720p) (1080p)
+    r"\(?[A-Za-z0-9]+\.blogspot\.[A-Za-z0-9.]+\)?",  # [temazosdance.blogspot.com]
+    r"\[[^\]]*(?:\.com|\.net|\.info|\.blogspot|wordpress)[^\]]*\]",  # [mp3hamster.net]
+    r"\(?offici?al\s+(?:music\s+)?(?:video|lyrics?)\)?",  # (Official Video)
+    r"\(?(?:HD|HQ|4K)\)?",
+    r"_H\.mp3$",
+    r"\b\d+p\b",  # 480p, 720p, 1080p
+    r"\(?\b\d+kbits?\b\)?",  # (192kbit), 192kbps
+]
+FILENAME_JUNK_RE = re.compile(
+    "|".join(_FILENAME_JUNK), re.IGNORECASE
+)
+
+
+def clean_filename_bits(name: str) -> str:
+    """Limpia la basura de descarga de un nombre de archivo (sin extensión)."""
+    text = name
+    text = FILENAME_JUNK_RE.sub(" ", text)
+    # Colapsa guiones bajos y espacios repetidos.
+    text = text.replace("_", " ")
+    text = MULTISPACE.sub(" ", text)
+    return text.strip(" .-–—")
+
+
+def track_from_filename(path: Path) -> TrackInfo | None:
+    """Crea un TrackInfo a partir del propio nombre del archivo.
+
+    Respaldo final cuando AcoustID no encuentra coincidencia y las etiquetas
+    internas tampoco sirven: extrae "Artista - Título" del nombre, limpiando
+    la basura típica de descargas web. Sin rating (no hay identificador).
+    """
+    stem = Path(path).stem
+    parts = [clean_filename_bits(p) for p in re.split(r"\s+-\s+", stem)]
+    if len(parts) < 2:
+        return None
+    artist, title = parts[0], parts[1]
+    if not artist or not title:
+        return None
+    if len(artist) < 2 or len(title) < 2:
+        return None
+    return TrackInfo(title=title, artist=artist, source="filename")
+
+
+def search_recording(query: str) -> TrackInfo | None:
+    """Busca una grabación en MusicBrainz por texto (rescate arriesgado).
+
+    Usado cuando la huella no coincide y no hay etiquetas ni nombre parseable.
+    El usuario acepta el riesgo de que el primer resultado sea incorrecto.
+    """
+    time.sleep(REQUEST_DELAY)
+    url = f"{MUSICBRAINZ_BASE}/recording/"
+    params = {"query": query, "fmt": "json", "limit": 3}
+    try:
+        resp = requests.get(url, params=params, headers=MUSICBRAINZ_HEADERS, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        log.warning("Búsqueda en MusicBrainz falló para %r: %s", query, exc)
+        return None
+
+    recordings = resp.json().get("recordings", [])
+    if not recordings:
+        return None
+    best = recordings[0]
+    title = best.get("title")
+    if not title:
+        return None
+    artists = best.get("artist-credit", [])
+    artist = " ".join(
+        (a.get("name", "") if isinstance(a, dict) else str(a)) for a in artists
+    ).strip()
+    if not artist or artist.lower() in ("unknown artist", "various artists"):
+        return None
+    track = TrackInfo(
+        title=title,
+        artist=artist,
+        recording_id=best.get("id"),
+        score=max(float(best.get("score", 0)) / 100.0, 0.0),
+        source="search",
+    )
+    # Sin puntuación de calidad suficiente, no nos fiamos del rescate.
+    if track.score < SEARCH_MIN_SCORE / 100:
+        return None
+    return enrich_from_musicbrainz(track)
+
+
+# ─────────────────────────── Detección de género ──────────────────────────────
+#
+# Cuando MusicBrainz no trae género (muy habitual en temas bakala/makina),
+# detectamos el subgénero por palabras clave del nombre de archivo y metadatos.
+# El orden importa: los estilos más específicos van primero para que ganen a
+# los genéricos (p. ej. "hardstyle" antes que "dance" o "hardcore").
+
+GENRE_KEYWORD_PRECEDENCE: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Poky", ("poky", "poke")),
+    ("Makina", ("makina", "mákina", "máquina", "maquina", "bakala")),
+    ("Hardstyle", ("hardstyle", "hard style", "rawstyle")),
+    ("Hardcore", ("hardcore", "hard core", "gabber", "gabba", "uptempo", "speedcore", "frenchcore", "hardtek", "terror")),
+    ("Hardtrance", ("hardtrance", "hard trance", "hardtechno", "hard techno")),
+    ("Remember", ("remember", "old school", "oldskool", "old skool")),
+    ("Hands Up", ("hands up", "handsup", "handz up")),
+    ("Jumpstyle", ("jumpstyle", "jump style")),
+    ("Trance", ("trance", "psytrance", "goa", "uplifting")),
+    ("Drum & Bass", ("dnb", "drum and bass", "drum & bass", "jungle", "breakcore")),
+    ("Dubstep", ("dubstep", "brostep")),
+    ("Electro", ("electro", "electrohouse", "electro house")),
+    ("Techno", ("techno", "schranz", "acid techno")),
+    ("House", ("house", "tech house", "deep house", "progressive house", "minimal")),
+    ("Progressive", ("progressive", "progresivo")),
+    ("Melodías", ("melodia", "melodía", "melodic", "melódico")),
+    ("Cantaditas", ("cantadita", "cantaditas", "cantada", "cantado")),
+    ("Eurodance", ("eurodance", "euro dance")),
+    ("Dance", ("dance", "dancefloor", "club")),
+    ("Rave", ("rave", "old school", "hardrave")),
+    ("EDM", ("edm",)),
+    ("Acid", ("acid",)),
+    ("Rumba", ("rumba", "rumbeta")),
+    ("Rock", ("rock", "punk", "metal", "indie", "grunge", "alternative")),
+    ("Pop", ("pop", "synthpop", "synth pop")),
+    ("Flamenco", ("flamenco", "sevillanas")),
+    ("Reggaeton", ("reggaeton", "reggaetón", "perreo", "dembow")),
+    ("Latin", ("salsa", "bachata", "merengue", "cumbia", "son")),
+    ("Reggae", ("reggae", "dancehall", "ska", "ragga")),
+    ("Hip Hop", ("hip hop", "hip-hop", "rap", "rnb", "r&b")),
+)
+
+
+def detect_genre(*texts: str) -> str | None:
+    """Detecta el subgénero por palabras clave. Devuelve el primero que acierte.
+
+    Las keywords cortas (<=4 letras) se comparan con límites de palabra para
+    evitar falsos positivos por subcadena (p. ej. "son" dentro de "Simpson").
+    Las compuestas y largas se buscan como subcadena (p. ej. "TechnoBase").
+    """
+    haystack = " ".join(t.lower() for t in texts if t)
+    for genre, keywords in GENRE_KEYWORD_PRECEDENCE:
+        for keyword in keywords:
+            if genre == "Electro" and _has_derived_form(haystack):
+                continue
+            if len(keyword) <= 4:
+                if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", haystack):
+                    return genre
+            elif keyword in haystack:
+                return genre
+    return None
+
+
+_ELECTRO_DERIVED = re.compile(r"\belectr[oó]nic[ao]s?\b|\belectronic\b")
+
+INSTRUMENTAL_PATTERN = re.compile(
+    r"\b(instrumental|inst\.?|dub mix|dub ?version|karaoke|acapella\s-?\s?backing|"
+    r"\bdub\b)(\b|\s|-|$)", re.IGNORECASE
+)
+
+
+def _has_derived_form(haystack: str) -> bool:
+    """True si 'electro' aparece como parte de 'electrónico/electrónica'."""
+    return bool(_ELECTRO_DERIVED.search(haystack))
+
+
+def _genre_from_ancestors(path: Path, stop: Path | None = None) -> str | None:
+    """Busca el género en los nombres de las carpetas desde la más cercana.
+
+    Se detiene en `stop` (la raíz de origen de una pasada de biblioteca) para
+    no heredar el nombre de la carpeta de colección (p. ej. `Remember`) como
+    si fuera un género. En modo biblioteca, `stop` se pasa ya resuelto.
+    """
+    for directory in path.parents:
+        if stop is not None and directory.resolve() == stop.resolve():
+            break
+        genre = detect_genre(directory.name)
+        if genre:
+            return genre
+    return None
+
+
 def _process_file(
-    path: Path, api_key: str, min_score: float, include_year: bool, apply: bool
+    path: Path,
+    api_key: str,
+    min_score: float,
+    include_year: bool,
+    apply: bool,
+    dest: Path | None = None,
+    source_root: Path | None = None,
 ) -> tuple[bool, bool]:
-    """Procesa un archivo. Devuelve (ok, renombrado)."""
+    """Procesa un archivo. Devuelve (ok, renombrado/movido).
+
+    Si `dest` es una carpeta (modo biblioteca), el archivo se mueve a
+    `dest/<Género>/Artista - Título.ext` en lugar de renombrarse en su sitio.
+    """
+    try:
+        return _process_file_inner(
+            path, api_key, min_score, include_year, apply, dest, source_root
+        )
+    except FileNotFoundError:
+        # El archivo pudo desaparecer (p. ej. una carpeta eliminada a mitad
+        # de la pasada). No debe tumbar el proceso completo.
+        print(f"  -> El archivo ya no existe (fue eliminado o movido).")
+        return False, False
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        print(f"  -> Error inesperado: {exc}")
+        return False, False
+
+
+def _process_file_inner(
+    path: Path,
+    api_key: str,
+    min_score: float,
+    include_year: bool,
+    apply: bool,
+    dest: Path | None = None,
+    source_root: Path | None = None,
+) -> tuple[bool, bool]:
     print(f"\n[{path}]")
     fingerprint = fingerprint_file(str(path))
     if fingerprint is None:
@@ -377,11 +672,47 @@ def _process_file(
     if not track:
         track = track_from_tags(path)
     if not track:
+        track = track_from_filename(path)
+    if not track:
+        track = search_recording(Path(path).stem)
+    if not track:
+        track = track_from_partial_tags(path)
+    if not track:
         print("  -> No se encontró ninguna coincidencia en AcoustID.")
         return False, False
 
+    # Género: carpeta madre (clasificación explícita del usuario) → palabras
+    # clave del nombre/título/artista → MusicBrainz. Se prueban todos los
+    # niveles de directorios ancestros: un archivo dentro de
+    # `-- MAKINA/Recopilatorio X/track.mp3` sigue heredando Makina de su
+    # carpeta de género. El keyword prioriza sobre MusicBrainz porque MB suele
+    # etiquetar géneros genéricos (p. ej. "Remember") que no clasifican nada.
+    genre = _genre_from_ancestors(path, source_root)
+    if not genre:
+        genre = detect_genre(Path(path).stem, track.title, track.artist, track.album)
+    if not genre and track.genre:
+        # MusicBrainz puede devolver géneros crudos o múltiples ("Trance",
+        # "alternative punk"). Se normalizan a la taxonomía por keywords.
+        genre = detect_genre(track.genre)
+    if not genre and dest is not None:
+        # Último recurso en modo biblioteca: los remember/eurodance de los 90
+        # casi siempre llevan vocal; si el título dice instrumental/dub, va a
+        # Melodías, el resto a Cantaditas.
+        title = track.title or Path(path).stem
+        genre = "Melodías" if INSTRUMENTAL_PATTERN.search(title) else "Cantaditas"
+
+    if dest is not None:
+        return _process_library(path, track, genre, include_year, apply, dest)
+
     target = resolve_target(path, track, include_year)
-    if track.score:
+    if track.source == "search":
+        desc = (
+            f"  Rescatada por búsqueda (score={track.score:.2f}): "
+            f"{track.artist} - {track.title}"
+        )
+    elif track.source == "filename":
+        desc = f"  Nombre del archivo: {track.artist} - {track.title}"
+    elif track.score:
         desc = (
             f"  Coincidencia (score={track.score:.2f}): "
             f"{track.artist} - {track.title}"
@@ -392,10 +723,18 @@ def _process_file(
     if track.rating is not None:
         votes = f", {track.rating_count} votos" if track.rating_count else ""
         print(f"  Puntuación (MusicBrainz): {track.rating:.1f}/5 estrellas{votes}")
+    if genre:
+        print(f"  Género: {genre}")
     print(f"  Nombre propuesto: {target.name}")
 
     if target == path:
         print("  El archivo ya tiene un nombre correcto.")
+        if apply and track.rating is not None:
+            if write_rating(path, track.rating):
+                print(f"  Puntuación guardada en metadatos: {track.rating:.1f}/5")
+        if apply and genre:
+            if write_genre(path, genre):
+                print(f"  Género guardado en metadatos: {genre}")
         return True, False
 
     if not apply:
@@ -409,6 +748,62 @@ def _process_file(
     if track.rating is not None:
         if write_rating(new_path, track.rating):
             print(f"  Puntuación guardada en metadatos: {track.rating:.1f}/5")
+    if genre:
+        if write_genre(new_path, genre):
+            print(f"  Género guardado en metadatos: {genre}")
+    return True, True
+
+
+def _process_library(
+    path: Path,
+    track: TrackInfo,
+    genre: str | None,
+    include_year: bool,
+    apply: bool,
+    dest: Path,
+) -> tuple[bool, bool]:
+    """Mueve el archivo a la biblioteca `dest/<Género>/Artista - Título.ext`."""
+    genre_dir = dest / (genre or "Sin género")
+    target = resolve_library_target(
+        genre_dir, track, path.suffix.lower(), include_year
+    )
+
+    if track.source == "search":
+        desc = (
+            f"  Rescatada por búsqueda (score={track.score:.2f}): "
+            f"{track.artist} - {track.title}"
+        )
+    elif track.source == "filename":
+        desc = f"  Nombre del archivo: {track.artist} - {track.title}"
+    elif track.score:
+        desc = (
+            f"  Coincidencia (score={track.score:.2f}): "
+            f"{track.artist} - {track.title}"
+        )
+    else:
+        desc = f"  Metadatos del archivo: {track.artist} - {track.title}"
+    print(desc + (f" [{track.album}] {track.year}" if track.album or track.year else ""))
+    if track.rating is not None:
+        votes = f", {track.rating_count} votos" if track.rating_count else ""
+        print(f"  Puntuación (MusicBrainz): {track.rating:.1f}/5 estrellas{votes}")
+    if genre:
+        print(f"  Género: {genre}")
+    print(f"  Mover a: {target}")
+
+    if not apply:
+        print("  [previsualización] usa --apply para mover.")
+        return True, False
+
+    new_path = move_file(path, target)
+    if not new_path:
+        return False, False
+
+    if track.rating is not None:
+        if write_rating(new_path, track.rating):
+            print(f"  Puntuación guardada en metadatos: {track.rating:.1f}/5")
+    if genre:
+        if write_genre(new_path, genre):
+            print(f"  Género guardado en metadatos: {genre}")
     return True, True
 
 
@@ -419,8 +814,13 @@ def run_rename(
     api_key: Optional[str] = None,
     min_score: float = MIN_SCORE,
     include_year: bool = False,
+    dest: Optional[Path | str] = None,
 ) -> dict[str, int]:
-    """Lógica compartida entre el CLI principal y el main() de este módulo."""
+    """Lógica compartida entre el CLI principal y el main() de este módulo.
+
+    Si `dest` se indica (modo biblioteca), los archivos identificados se mueven
+    a `dest/<Género>/Artista - Título.ext` en lugar de renombrarse en el sitio.
+    """
     key = api_key or acoustid_api_key()
     if not key:
         print(
@@ -436,6 +836,16 @@ def run_rename(
         print("No se encontraron archivos de audio para procesar.")
         sys.exit(1)
 
+    dest_path = Path(dest) if dest is not None else None
+    if dest_path is not None:
+        dest_path.mkdir(parents=True, exist_ok=True)
+
+    resolved_roots = []
+    for p in paths:
+        r = Path(p).resolve()
+        resolved_roots.append(r if r.is_dir() else r.parent)
+    resolved_roots = sorted(set(resolved_roots))
+
     print(
         f"Procesando {len(files)} archivo(s) "
         f"({'modo aplicar' if apply else 'modo previsualización'})"
@@ -444,7 +854,16 @@ def run_rename(
     for i, path in enumerate(files):
         if i:
             time.sleep(REQUEST_DELAY)
-        ok, renamed = _process_file(path, key, min_score, include_year, apply)
+        # Raíz de origen = la ruta pasada más profunda que aún es ancestro del
+        # archivo. Permite a _genre_from_ancestors frizar la herencia en la
+        # carpeta de colección (p. ej. `Remember`) sin tratarla como género.
+        candidates = [
+            r for r in resolved_roots if path.resolve().is_relative_to(r)
+        ]
+        source_root = max(candidates, key=lambda r: len(str(r))) if candidates else None
+        ok, renamed = _process_file(
+            path, key, min_score, include_year, apply, dest_path, source_root
+        )
         if not ok:
             stats["errors"] += 1
         if renamed:
@@ -476,6 +895,8 @@ def main() -> None:
     parser.add_argument("--min-score", type=float, default=MIN_SCORE,
                         help="Puntuación mínima de coincidencia (0-1, por defecto 0.5).")
     parser.add_argument("--year", action="store_true", help="Incluye el año: 'Artista - Título (Año)'.")
+    parser.add_argument("--dest", default="",
+                        help="Modo biblioteca: mover a DEST/<Género>/Artista - Título.ext (borra el origen).")
     args = parser.parse_args()
 
     run_rename(
@@ -485,6 +906,7 @@ def main() -> None:
         api_key=args.api_key or None,
         min_score=args.min_score,
         include_year=args.year,
+        dest=Path(args.dest) if args.dest else None,
     )
 
 

@@ -1,5 +1,9 @@
 # TODO
 
+
+  Continue  opencode -s ses_0093ee772ffex3m2aJz0cTTuSz
+
+  
 Lista de tareas pendientes de `gestor-listas`. Marcadas por prioridad y con el
 contexto necesario para retomarlas.
 

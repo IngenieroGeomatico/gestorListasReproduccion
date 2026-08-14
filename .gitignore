@@ -18,6 +18,9 @@ htmlcov/
 .venv/
 venv/
 
+# logs
+log/
+
 # data & downloads
 data/gestor.db
 data/*.sqlite

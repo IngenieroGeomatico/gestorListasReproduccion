@@ -273,6 +273,28 @@ def write_rating(filepath: str | Path, stars: float) -> bool:
         return False
 
 
+def write_genre(filepath: str | Path, genre: str) -> bool:
+    """Guarda el género en los metadatos del archivo (MP3/FLAC/OGG/Opus)."""
+    path = Path(filepath)
+    try:
+        ext = path.suffix.lower()
+        if ext == ".mp3":
+            tags = ID3(str(path))
+            tags["TCON"] = TCON(encoding=3, text=genre)
+            tags.save(str(path))
+            return True
+        audio = _vorbis_rating_file(path)
+        if audio is not None:
+            audio["GENRE"] = genre
+            audio.save()
+            return True
+        logger.warning("Formato %s no soportado para guardar género.", ext)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.error("No se pudo guardar el género en %s: %s", path, exc)
+        return False
+
+
 # ── Detección de BPM ─────────────────────────────────────────────
 
 _SAMPLE_RATE = 22050
