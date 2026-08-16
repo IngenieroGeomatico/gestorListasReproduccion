@@ -72,6 +72,8 @@ class TrackInfo:
     year: str | None = None
     score: float = 0.0
     recording_id: str | None = None
+    release_id: str | None = None
+    release_group_id: str | None = None
     rating: float | None = None
     rating_count: int | None = None
     genre: str | None = None
@@ -179,6 +181,8 @@ def _parse_acoustid_result(data: dict[str, Any]) -> list[TrackInfo]:
             releases = recording.get("releases", [])
             album = releases[0].get("title") if releases else None
             year = next((y for y in (_get_year(r) for r in releases) if y), None)
+            release = releases[0] if releases else {}
+            release_group = release.get("release-group") or {}
             tracks.append(
                 TrackInfo(
                     title=title or "Título desconocido",
@@ -187,6 +191,8 @@ def _parse_acoustid_result(data: dict[str, Any]) -> list[TrackInfo]:
                     year=year,
                     score=score,
                     recording_id=recording.get("id"),
+                    release_id=release.get("id"),
+                    release_group_id=release_group.get("id"),
                 )
             )
     return tracks
@@ -239,6 +245,9 @@ def enrich_from_musicbrainz(track: TrackInfo) -> TrackInfo:
         year = _get_year(releases[0])
         if year:
             track.year = year
+        track.release_id = releases[0].get("id") or track.release_id
+        release_group = releases[0].get("release-group") or {}
+        track.release_group_id = release_group.get("id") or track.release_group_id
     rating = data.get("rating")
     if isinstance(rating, dict):
         if rating.get("value") is not None:

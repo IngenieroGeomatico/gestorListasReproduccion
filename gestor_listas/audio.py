@@ -15,6 +15,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, TBPM, APIC, POPM, error as MutagenError
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
+from mutagen.wave import WAVE as Wave
 
 from .config import resolve_ffmpeg
 
@@ -228,9 +229,9 @@ RATING_EMAIL = "MusicBrainz"
 
 
 def _mp3_rating(path: Path, stars: float) -> None:
-    audio = ID3(path)
+    audio = _id3_tags(path)
     audio.add(POPM(email=RATING_EMAIL, rating=round(stars * _POPM_PER_STAR), counter=0))
-    audio.save()
+    audio.save(str(path))
 
 
 def _vorbis_rating(audio, stars: float) -> None:
@@ -250,16 +251,37 @@ def _vorbis_rating_file(path: Path):
     return None
 
 
+def _id3_tags(path: Path):
+    """Devuelve las etiquetas ID3 de un MP3 o WAV (contenedor WAVE: ID3).
+
+    Para WAV se usa ID3 directo (no el contenedor Wave): el guardado del
+    contenedor con ID3v2.4 produce 'Invalid chunk ID ID3' al incorporar APIC.
+    """
+    ext = path.suffix.lower()
+    if ext == ".mp3":
+        return ID3(path)
+    if ext == ".wav":
+        try:
+            return ID3(path)
+        except MutagenError:
+            try:
+                wave = Wave(path).tags
+                return wave if wave is not None else ID3()
+            except Exception:
+                return ID3()
+    return None
+
+
 def write_rating(filepath: str | Path, stars: float) -> bool:
     """Guarda la puntuación (0-5 estrellas) en los metadatos del archivo.
 
-    Soporta MP3 (frame POPM) y FLAC/OGG/Opus (etiquetas RATING +
+    Soporta MP3/WAV (frame POPM) y FLAC/OGG/Opus (etiquetas RATING +
     POPULARIMETER). Devuelve True si se escribió correctamente.
     """
     path = Path(filepath)
     try:
         ext = path.suffix.lower()
-        if ext == ".mp3":
+        if ext in {".mp3", ".wav"}:
             _mp3_rating(path, stars)
             return True
         audio = _vorbis_rating_file(path)
@@ -274,14 +296,20 @@ def write_rating(filepath: str | Path, stars: float) -> bool:
 
 
 def write_genre(filepath: str | Path, genre: str) -> bool:
-    """Guarda el género en los metadatos del archivo (MP3/FLAC/OGG/Opus)."""
+    """Guarda el género en los metadatos del archivo (MP3/WAV/FLAC/OGG/Opus/M4A)."""
     path = Path(filepath)
     try:
         ext = path.suffix.lower()
-        if ext == ".mp3":
-            tags = ID3(str(path))
+        if ext in {".mp3", ".wav"}:
+            tags = _id3_tags(path)
             tags["TCON"] = TCON(encoding=3, text=genre)
             tags.save(str(path))
+            return True
+        if ext in {".m4a", ".mp4", ".m4p"}:
+            from mutagen.mp4 import MP4
+            tags = MP4(str(path))
+            tags["\xa9gen"] = [genre]
+            tags.save()
             return True
         audio = _vorbis_rating_file(path)
         if audio is not None:
@@ -292,6 +320,87 @@ def write_genre(filepath: str | Path, genre: str) -> bool:
         return False
     except Exception as exc:  # noqa: BLE001
         logger.error("No se pudo guardar el género en %s: %s", path, exc)
+        return False
+
+
+# ── Carátula (cover art) ───────────────────────────────────────
+
+
+def _vorbis_picture_file(path: Path):
+    """Contenedor Vorbis/FLAC/MP4 capaz de guardar picture/covr, o None."""
+    ext = path.suffix.lower()
+    if ext in {".ogg", ".oga"}:
+        return OggVorbis(path)
+    if ext == ".opus":
+        return OggOpus(path)
+    if ext == ".flac":
+        return FLAC(path)
+    return None
+
+
+def has_cover(filepath: str | Path) -> bool:
+    """True si el archivo ya tiene carátula en sus metadatos.
+
+    Soporta MP3/WAV (APIC), FLAC/OGG/Opus (pictures/metadata_block_picture)
+    y MP4/M4A (covr).
+    """
+    path = Path(filepath)
+    ext = path.suffix.lower()
+    try:
+        if ext in {".mp3", ".wav"}:
+            tags = _id3_tags(path)
+            return bool(tags.getall("APIC"))
+        if ext in {".mp4", ".m4a", ".m4p"}:
+            from mutagen.mp4 import MP4
+            return bool(MP4(str(path)).get("covr"))
+        audio = _vorbis_picture_file(path)
+        if audio is not None:
+            if ext == ".flac":
+                return bool(audio.pictures)
+            return bool(audio.get("metadata_block_picture"))
+    except Exception:
+        pass
+    return False
+
+
+def write_cover(filepath: str | Path, image_data: bytes, mime: str = "image/jpeg") -> bool:
+    """Guarda una carátula en los metadatos (MP3/WAV APIC, FLAC/OGG/Opus, M4A covr)."""
+    path = Path(filepath)
+    ext = path.suffix.lower()
+    try:
+        if ext in {".mp3", ".wav"}:
+            tags = _id3_tags(path)
+            tags.delall("APIC")
+            tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
+            tags.save(str(path))
+            return True
+        if ext in {".mp4", ".m4a", ".m4p"}:
+            from mutagen.mp4 import MP4
+            tags = MP4(str(path))
+            tags["covr"] = [image_data]
+            tags.save()
+            return True
+        audio = _vorbis_picture_file(path)
+        if audio is not None:
+            from mutagen.flac import Picture
+
+            pic = Picture()
+            pic.type = 3  # portada frontal
+            pic.mime = mime
+            pic.desc = "Cover"
+            pic.data = image_data
+            if ext == ".flac":
+                audio.add_picture(pic)
+            else:
+                import base64
+                encoded = base64.b64encode(pic.write()).decode("ascii")
+                audio["metadata_block_picture"] = [encoded]
+            audio.save()
+            return True
+        logger.warning("Formato %s no soportado para guardar carátula.", ext)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.error("No se pudo guardar la carátula en %s: %s", path, exc)
         return False
 
 
@@ -697,7 +806,9 @@ def detect_bpm(
             tmp_path,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace", timeout=120
+        )
         if result.returncode != 0:
             return None
 

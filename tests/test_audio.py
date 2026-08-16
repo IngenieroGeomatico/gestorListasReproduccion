@@ -232,7 +232,7 @@ class TestWriteRating:
         assert tags["RATING"] == "5"
 
     def test_unsupported_format_returns_false(self, tmp_path) -> None:
-        assert write_rating(tmp_path / "song.wav", 4) is False
+        assert write_rating(tmp_path / "song.m4a", 4) is False
 
     def test_failure_returns_false(self, tmp_path, mocker) -> None:
         mocker.patch("gestor_listas.audio.ID3", side_effect=Exception("corrupto"))

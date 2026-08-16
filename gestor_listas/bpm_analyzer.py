@@ -11,6 +11,7 @@ from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
+from mutagen.wave import WAVE as Wave
 
 from .audio import detect_bpm
 
@@ -73,6 +74,17 @@ def read_existing_bpm(filepath: Path) -> Optional[float]:
                 return float(tags[key][0].decode().strip())
             if "\xa9BPM" in tags:
                 return float(tags["\xa9BPM"][0])
+        elif ext == ".wav":
+            try:
+                audio = Wave(str(filepath))
+                if audio.tags is not None and "TBPM" in audio.tags:
+                    return float(audio.tags["TBPM"].text[0])
+            except Exception:
+                pass
+            tags = ID3(str(filepath))
+            tbpm = tags.get("TBPM")
+            if tbpm and tbpm.text:
+                return float(tbpm.text[0])
         else:
             tags = MutagenFile(str(filepath))
             if tags:
@@ -118,6 +130,20 @@ def write_bpm(filepath: Path, bpm: float) -> bool:
             tags = MP4(str(filepath))
             tags["----:com.apple.iTunes:BPM"] = [bpm_str.encode()]
             tags.save()
+            return True
+        elif ext == ".wav":
+            try:
+                audio = Wave(str(filepath))
+                if audio.tags is None:
+                    audio.add_tags()
+                audio.tags["TBPM"] = TBPM(encoding=3, text=bpm_str)
+                audio.save()
+                return True
+            except Exception:
+                pass
+            tags = ID3(str(filepath))
+            tags["TBPM"] = TBPM(encoding=3, text=bpm_str)
+            tags.save(str(filepath))
             return True
         else:
             tags = MutagenFile(str(filepath), easy=True)
