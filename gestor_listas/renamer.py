@@ -51,7 +51,7 @@ MIN_SCORE = 0.5
 
 # Pausa entre canciones para respetar el límite de uso de las APIs
 # (MusicBrainz pide ~1 req/seg; AcoustID permite hasta 3 req/seg).
-REQUEST_DELAY = 1.0
+REQUEST_DELAY = 1.2
 
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 MULTISPACE = re.compile(r"\s+")
@@ -215,16 +215,32 @@ def enrich_from_musicbrainz(track: TrackInfo) -> TrackInfo:
     """Completa metadatos de una grabación usando la API de MusicBrainz."""
     if not track.recording_id:
         return track
-    # MusicBrainz pide ~1 req/s: esperamos 1s antes de cada consulta para no
-    # saturar el servicio (los 503 se daban por lanzar peticiones en ráfaga).
-    time.sleep(REQUEST_DELAY)
+    # MusicBrainz pide ~1 req/s: esperamos REQUEST_DELAY antes de cada consulta
+    # para no saturar el servicio (los 503 se daban por lanzar peticiones en
+    # ráfaga). Reintentamos con backoff exponencial ante 503/502/429, que son
+    # respuestas transitorias típicas de saturación.
     url = f"{MUSICBRAINZ_BASE}/recording/{track.recording_id}"
     params = {"inc": "releases ratings genres", "fmt": "json"}
-    try:
-        resp = requests.get(url, params=params, headers=MUSICBRAINZ_HEADERS, timeout=10)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("MusicBrainz falló para %s: %s", track.recording_id, exc)
+    for attempt in range(3):
+        time.sleep(REQUEST_DELAY * (attempt + 1))
+        try:
+            resp = requests.get(url, params=params, headers=MUSICBRAINZ_HEADERS, timeout=15)
+            if resp.status_code in (429, 502, 503, 504):
+                log.warning(
+                    "MusicBrainz %s para %s (intento %d/3), reintentando...",
+                    resp.status_code, track.recording_id, attempt + 1,
+                )
+                time.sleep(2 ** (attempt + 1))
+                continue
+            resp.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            log.warning("MusicBrainz falló para %s (intento %d/3): %s",
+                        track.recording_id, attempt + 1, exc)
+            if attempt == 2:
+                return track
+            time.sleep(2 ** (attempt + 1))
+    else:
         return track
 
     data = resp.json()
@@ -505,14 +521,26 @@ def search_recording(query: str) -> TrackInfo | None:
     Usado cuando la huella no coincide y no hay etiquetas ni nombre parseable.
     El usuario acepta el riesgo de que el primer resultado sea incorrecto.
     """
-    time.sleep(REQUEST_DELAY)
     url = f"{MUSICBRAINZ_BASE}/recording/"
     params = {"query": query, "fmt": "json", "limit": 3}
-    try:
-        resp = requests.get(url, params=params, headers=MUSICBRAINZ_HEADERS, timeout=10)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("Búsqueda en MusicBrainz falló para %r: %s", query, exc)
+    for attempt in range(3):
+        time.sleep(REQUEST_DELAY * (attempt + 1))
+        try:
+            resp = requests.get(url, params=params, headers=MUSICBRAINZ_HEADERS, timeout=15)
+            if resp.status_code in (429, 502, 503, 504):
+                log.warning("MusicBrainz %s para %r (intento %d/3), reintentando...",
+                            resp.status_code, query, attempt + 1)
+                time.sleep(2 ** (attempt + 1))
+                continue
+            resp.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            log.warning("Búsqueda en MusicBrainz falló para %r (intento %d/3): %s",
+                        query, attempt + 1, exc)
+            if attempt == 2:
+                return None
+            time.sleep(2 ** (attempt + 1))
+    else:
         return None
 
     recordings = resp.json().get("recordings", [])

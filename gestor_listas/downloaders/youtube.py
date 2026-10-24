@@ -79,9 +79,10 @@ class YouTubeDownloader:
         except FileNotFoundError:
             raise DownloadError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
 
-        if result.returncode != 0:
-            return None
-
+        # yt-dlp puede devolver código de salida != 0 aunque el archivo se haya
+        # descargado (p. ej. fallo al incrustar miniatura/metadatos). Si el
+        # fichero final existe, lo consideramos válido en vez de perder la
+        # descarga: _parse_output_path ya comprueba su existencia.
         output_path = self._parse_output_path(result.stdout, output_dir, safe_name)
         if output_path is None:
             return None

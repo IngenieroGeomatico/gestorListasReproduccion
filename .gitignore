@@ -49,3 +49,8 @@ Thumbs.db
 
 # agent tooling
 .omo/
+.playwright-mcp/
+
+# backups locales (no subir)
+.env.bak*
+data/*.bak*
