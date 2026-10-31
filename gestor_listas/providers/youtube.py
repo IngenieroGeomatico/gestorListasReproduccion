@@ -67,14 +67,18 @@ class YouTubeProvider(Provider):
 
         entries = data.get("entries", [])
         tracks: list[Track] = []
+        seen_ids = set()
         for entry in entries:
             video_id = entry.get("id", "")
-            title = entry.get("title", "")
-            uploader = entry.get("uploader", entry.get("channel", ""))
+            title = entry.get("title") or ""
+            uploader = entry.get("uploader") or entry.get("channel") or ""
             duration = entry.get("duration")
 
             if not video_id or not title:
                 continue
+            if video_id in seen_ids:
+                continue
+            seen_ids.add(video_id)
 
             tracks.append(Track(
                 id=video_id,
