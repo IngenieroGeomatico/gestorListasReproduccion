@@ -79,27 +79,41 @@ class YouTubeDownloader:
                 return existing
         output_template = str(output_dir / f"{safe_name}.%(ext)s")
 
-        cmd = self._build_cmd(self._get_url(track), output_template)
+        # Candidatos de URL: primero el enlace directo (si lo tiene) y, si falla,
+        # una búsqueda por texto para encontrar alternativas (vídeos borrados, etc.).
+        candidates = []
+        direct = self._get_url(track)
+        candidates.append(direct)
+        if "ytsearch:" not in direct:
+            candidates.append(f"ytsearch:{track.artist} - {track.title}".strip())
+        # Eliminar duplicados manteniendo el orden.
+        seen = set()
+        urls = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                urls.append(c)
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        except FileNotFoundError:
-            raise DownloadError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
+        for url in urls:
+            cmd = self._build_cmd(url, output_template)
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            except FileNotFoundError:
+                raise DownloadError("yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
 
-        # yt-dlp puede devolver código de salida != 0 aunque el archivo se haya
-        # descargado (p. ej. fallo al incrustar miniatura/metadatos). Si el
-        # fichero final existe, lo consideramos válido en vez de perder la
-        # descarga: _parse_output_path ya comprueba su existencia.
-        output_path = self._parse_output_path(result.stdout, output_dir, safe_name)
-        if output_path is None:
-            return None
+            # yt-dlp puede devolver código de salida != 0 aunque el archivo se haya
+            # descargado (p. ej. fallo al incrustar miniatura/metadatos). Si el
+            # fichero final existe, lo consideramos válido en vez de perder la
+            # descarga: _parse_output_path ya comprueba su existencia.
+            output_path = self._parse_output_path(result.stdout, output_dir, safe_name)
+            if output_path is not None:
+                from ..bpm_analyzer import get_bpm, write_bpm
+                bpm = get_bpm(output_path)
+                if bpm is not None:
+                    write_bpm(output_path, bpm)
+                return output_path
 
-        from ..bpm_analyzer import get_bpm, write_bpm
-        bpm = get_bpm(output_path)
-        if bpm is not None:
-            write_bpm(output_path, bpm)
-
-        return output_path
+        return None
 
     @staticmethod
     def _parse_output_path(stdout: str, output_dir: Path, safe_name: str) -> Optional[Path]:
