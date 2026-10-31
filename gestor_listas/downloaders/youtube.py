@@ -69,7 +69,10 @@ class YouTubeDownloader:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_name = safe_filename(f"{track.artist} - {track.title}")
+        if track.artist and track.artist.strip():
+            safe_name = safe_filename(f"{track.artist} - {track.title}")
+        else:
+            safe_name = safe_filename(track.title)
         # Si ya existe un fichero con ese nombre (cualquier extensión de audio),
         # lo consideramos descargado y no volvemos a bajarlo.
         for existing in output_dir.iterdir():
