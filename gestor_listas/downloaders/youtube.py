@@ -70,6 +70,13 @@ class YouTubeDownloader:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = safe_filename(f"{track.artist} - {track.title}")
+        # Si ya existe un fichero con ese nombre (cualquier extensión de audio),
+        # lo consideramos descargado y no volvemos a bajarlo.
+        for existing in output_dir.iterdir():
+            if existing.is_file() and existing.stem == safe_name and existing.suffix.lower() in {
+                ".mp3", ".opus", ".m4a", ".webm", ".ogg", ".flac", ".wav",
+            }:
+                return existing
         output_template = str(output_dir / f"{safe_name}.%(ext)s")
 
         cmd = self._build_cmd(self._get_url(track), output_template)

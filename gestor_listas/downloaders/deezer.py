@@ -90,10 +90,14 @@ class DeezerDownloader:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = safe_filename(f"{track.artist} - {track.title}")
+        # Si ya existe un fichero de audio con ese nombre (cualquier formato),
+        # lo consideramos descargado y no volvemos a bajarlo.
+        for existing in output_dir.iterdir():
+            if existing.is_file() and existing.stem == safe_name and existing.suffix.lower() in {
+                ".mp3", ".opus", ".m4a", ".webm", ".ogg", ".flac", ".wav",
+            }:
+                return existing
         output_path = output_dir / f"{safe_name}.mp3"
-
-        if output_path.exists():
-            return output_path
 
         deezer_id = self._resolve_deezer_id(track)
         if not deezer_id:
